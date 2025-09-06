@@ -1,0 +1,1876 @@
+// AI Chat Navigator Content Script - Simple Version
+(function() {
+    'use strict';
+    
+    console.log('AI Chat Navigator loaded on:', window.location.hostname);
+    
+    let currentConversations = [];
+    let isInjected = false;
+    
+    // Robust conversation extraction for ChatGPT
+    function extractChatGPT() {
+        console.log('🤖 ChatGPT: Starting extraction...');
+        const conversations = [];
+        
+        // Enhanced selectors for ChatGPT (2024-2025 interface)
+        const messageSelectors = [
+            // Primary modern ChatGPT selectors
+            '[data-message-author-role]',
+            '[data-message-id]',
+            '[data-testid^="conversation-turn"]', 
+            '[data-testid*="conversation-turn"]',
+            '[data-testid*="message"]',
+            // Group patterns
+            '.group.w-full.text-token-text-primary',
+            '.group.w-full.text-gray-800',
+            '.group.w-full',
+            'div.group',
+            '.group',
+            // Class-based patterns
+            '[class*="conversation-turn"]',
+            '[class*="message"]',
+            '[class*="chat"]',
+            // Role-based selectors
+            'article',
+            '[role="article"]',
+            '[role="presentation"]',
+            // Broader container patterns
+            'main > div > div',
+            'main div[class*="flex"]',
+            'main div[class*="w-full"]',
+            // Generic with substantial text
+            'main div',
+            'div'
+        ];
+        
+        let messages = [];
+        let workingSelector = null;
+        
+        // Try each selector and pick the best one using scoring system
+        let bestMessages = [];
+        let bestSelector = null;
+        let bestScore = 0;
+        
+        for (const selector of messageSelectors) {
+            const found = document.querySelectorAll(selector);
+            console.log(`ChatGPT: Selector "${selector}": found ${found.length} elements`);
+            
+            if (found.length > 0) {
+                // Filter and score potential messages
+                const filtered = Array.from(found).filter(el => {
+                    const text = extractTextFromElement(el);
+                    // More lenient filtering for ChatGPT
+                    return text.length > 3 && text.length < 50000;
+                });
+                
+                if (filtered.length > 0) {
+                    // Score based on likely message patterns
+                    let score = filtered.length;
+                    
+                    // Boost score for elements that look like user/AI messages
+                    const pairsFound = filtered.filter(el => {
+                        const className = el.className || '';
+                        const dataAttrs = Array.from(el.attributes).map(attr => attr.name + '=' + attr.value).join(' ');
+                        return (
+                            dataAttrs.includes('data-message-author-role') ||
+                            dataAttrs.includes('user') ||
+                            dataAttrs.includes('assistant') ||
+                            dataAttrs.includes('message') ||
+                            className.includes('user') ||
+                            className.includes('group') ||
+                            className.includes('message') ||
+                            el.querySelector('[data-message-author-role]') ||
+                            el.closest('[data-message-author-role]')
+                        );
+                    }).length;
+                    
+                    score += pairsFound * 10; // Heavily weight elements that look like messages
+                    
+                    // Special boost for ChatGPT-specific patterns
+                    if (selector.includes('[data-message-author-role]') || selector.includes('conversation-turn')) {
+                        score += 50;
+                    }
+                    
+                    console.log(`ChatGPT: "${selector}" scored ${score} (${filtered.length} elements, ${pairsFound} message-like)`);
+                    
+                    if (score > bestScore) {
+                        bestMessages = filtered;
+                        bestSelector = selector;
+                        bestScore = score;
+                    }
+                }
+            }
+        }
+        
+        messages = bestMessages;
+        workingSelector = bestSelector;
+        
+        if (messages.length === 0) {
+            console.log('ChatGPT: No messages found with any selector');
+            return conversations;
+        }
+
+        console.log(`ChatGPT: Processing ${messages.length} message elements`);
+        
+        // Enhanced message processing with better conversation reconstruction
+        let allConversations = [];
+        let userMessages = [];
+        let assistantMessages = [];
+        
+        // First pass: separate user and assistant messages clearly
+        for (let i = 0; i < messages.length; i++) {
+            const message = messages[i];
+            const isUser = isUserMessage(message, 'chatgpt');
+            const text = extractTextFromElement(message);
+            
+            console.log(`ChatGPT: Message ${i}: isUser=${isUser}, textLength=${text.length}, text="${text.substring(0, 50)}..."`);
+            
+            if (text.trim() && text.length > 3) {
+                const messageData = {
+                    element: message,
+                    text: text,
+                    isUser: isUser,
+                    index: i
+                };
+                
+                if (isUser) {
+                    userMessages.push(messageData);
+                    console.log(`ChatGPT: 👤 User message ${userMessages.length}: "${text.substring(0, 50)}..."`);
+                } else {
+                    assistantMessages.push(messageData);
+                    console.log(`ChatGPT: 🤖 Assistant message ${assistantMessages.length}: "${text.substring(0, 50)}..."`);
+                }
+            }
+        }
+        
+        console.log(`ChatGPT: Found ${userMessages.length} user messages and ${assistantMessages.length} assistant messages`);
+        
+        // Second pass: intelligently pair them
+        if (userMessages.length > 0 && assistantMessages.length > 0) {
+            // Method 1: Sequential pairing (most common)
+            const minCount = Math.min(userMessages.length, assistantMessages.length);
+            
+            for (let i = 0; i < minCount; i++) {
+                const userMsg = userMessages[i];
+                let assistantMsg = null;
+                
+                // Find the next assistant message after this user message
+                for (let j = 0; j < assistantMessages.length; j++) {
+                    if (assistantMessages[j].index > userMsg.index) {
+                        assistantMsg = assistantMessages[j];
+                        assistantMessages.splice(j, 1); // Remove to avoid reuse
+                        break;
+                    }
+                }
+                
+                // Fallback: use the next available assistant message
+                if (!assistantMsg && assistantMessages.length > 0) {
+                    assistantMsg = assistantMessages.shift();
+                }
+                
+                if (assistantMsg) {
+                    allConversations.push({
+                        id: allConversations.length + 1,
+                        question: userMsg.text,
+                        answer: assistantMsg.text,
+                        timestamp: new Date().toISOString(),
+                        questionElement: userMsg.element,
+                        answerElement: assistantMsg.element
+                    });
+                    console.log(`ChatGPT: ✅ Paired conversation ${allConversations.length}: User(${userMsg.index}) + Assistant(${assistantMsg.index})`);
+                }
+            }
+            
+            conversations.push(...allConversations);
+        } else {
+            // Fallback: original sequential processing
+            let currentPair = { question: '', answer: '' };
+            
+            for (let i = 0; i < messages.length; i++) {
+                const message = messages[i];
+                const isUser = isUserMessage(message, 'chatgpt');
+                const text = extractTextFromElement(message);
+                
+                if (text.trim() && text.length > 3) {
+                    if (isUser) {
+                        if (currentPair.question && currentPair.answer) {
+                            conversations.push({
+                                id: conversations.length + 1,
+                                question: currentPair.question,
+                                answer: currentPair.answer,
+                                timestamp: new Date().toISOString(),
+                                questionElement: currentPair.questionElement,
+                                answerElement: currentPair.answerElement
+                            });
+                        }
+                        currentPair = { question: text, answer: '', questionElement: message };
+                    } else if (currentPair.question) {
+                        if (!currentPair.answer) {
+                            currentPair.answer = text;
+                            currentPair.answerElement = message;
+                        } else if (text.length > 20) {
+                            currentPair.answer += '\n\n' + text;
+                        }
+                    }
+                }
+            }
+            
+            // Add final pair
+            if (currentPair.question && currentPair.answer) {
+                conversations.push({
+                    id: conversations.length + 1,
+                    question: currentPair.question,
+                    answer: currentPair.answer,
+                    timestamp: new Date().toISOString(),
+                    questionElement: currentPair.questionElement,
+                    answerElement: currentPair.answerElement
+                });
+            }
+        }
+        
+        console.log(`ChatGPT: Final result - ${conversations.length} conversations extracted`);
+        
+        // If we got very few conversations, try alternative extraction method
+        if (conversations.length < 3 && messages.length > 6) {
+            console.log(`ChatGPT: Low extraction count (${conversations.length}), trying alternative method...`);
+            
+            // Alternative: group consecutive messages by role
+            const alternativeConversations = [];
+            let userMessages = [];
+            let aiMessages = [];
+            let lastRole = null;
+            
+            for (let i = 0; i < messages.length; i++) {
+                const message = messages[i];
+                const isUser = isUserMessage(message, 'chatgpt');
+                const text = extractTextFromElement(message);
+                
+                if (text.trim() && text.length > 3) {
+                    if (isUser) {
+                        // If we were collecting AI messages, pair them with previous user messages
+                        if (aiMessages.length > 0 && userMessages.length > 0) {
+                            const userText = userMessages.map(m => extractTextFromElement(m)).join(' ');
+                            const aiText = aiMessages.map(m => extractTextFromElement(m)).join('\n\n');
+                            
+                            alternativeConversations.push({
+                                id: alternativeConversations.length + 1,
+                                question: userText,
+                                answer: aiText,
+                                timestamp: new Date().toISOString(),
+                                questionElement: userMessages[0],
+                                answerElement: aiMessages[0]
+                            });
+                        }
+                        
+                        // Start new user message collection
+                        userMessages = [message];
+                        aiMessages = [];
+                        lastRole = 'user';
+                    } else {
+                        // Collect AI messages
+                        if (lastRole === 'user' || lastRole === 'ai') {
+                            aiMessages.push(message);
+                            lastRole = 'ai';
+                        }
+                    }
+                }
+            }
+            
+            // Handle final pair
+            if (userMessages.length > 0 && aiMessages.length > 0) {
+                const userText = userMessages.map(m => extractTextFromElement(m)).join(' ');
+                const aiText = aiMessages.map(m => extractTextFromElement(m)).join('\n\n');
+                
+                alternativeConversations.push({
+                    id: alternativeConversations.length + 1,
+                    question: userText,
+                    answer: aiText,
+                    timestamp: new Date().toISOString(),
+                    questionElement: userMessages[0],
+                    answerElement: aiMessages[0]
+                });
+            }
+            
+            console.log(`ChatGPT: Alternative method found ${alternativeConversations.length} conversations`);
+            
+            // Use alternative if it found more conversations
+            if (alternativeConversations.length > conversations.length) {
+                console.log('ChatGPT: Using alternative extraction results');
+                return alternativeConversations;
+            }
+        }
+        
+        return conversations;
+    }
+    
+    // Robust conversation extraction for Claude
+    function extractClaude() {
+        console.log('🤖 Claude: Starting extraction...');
+        const conversations = [];
+        
+        // Claude's message structure - completely updated for 2024-2025 interface
+        const messageSelectors = [
+            // Modern Claude interface (Dec 2024 - Jan 2025)
+            'div[data-testid="conversation-turn"]',
+            'div[data-is-streaming]',
+            'div[class*="font-user-message"]',
+            'div[class*="font-claude-message"]', 
+            'div[class*="font-assistant-message"]',
+            // Alternative modern patterns
+            '[data-testid*="message"]',
+            '[data-testid*="turn"]',
+            '[data-testid*="conversation"]',
+            'div[role="region"]',
+            // Content-based selectors with higher specificity
+            'div.prose',
+            'div[class*="prose"]',
+            'div[class*="markdown"]',
+            // User-specific patterns
+            'div[class*="user"]',
+            'div[class*="human"]',
+            'div[class*="Human"]',
+            // Assistant-specific patterns
+            'div[class*="claude"]',
+            'div[class*="Claude"]',
+            'div[class*="assistant"]',
+            'div[class*="Assistant"]',
+            // Generic but targeted
+            'div[class*="message"]',
+            'div[role="article"]',
+            'article div',
+            // Chat container patterns
+            'div[class*="chat"]',
+            'div[class*="conversation"]',
+            // Very broad but filtered later
+            'main > div > div',
+            'main div[class]',
+            // Last resort - any div with substantial text
+            'div'
+        ];
+        
+        let messages = [];
+        let workingSelector = null;
+        
+        // Try each selector and pick the best one
+        let bestMessages = [];
+        let bestSelector = null;
+        let bestScore = 0;
+        
+        for (const selector of messageSelectors) {
+            const found = document.querySelectorAll(selector);
+            console.log(`Claude: Selector "${selector}": found ${found.length} elements`);
+            
+            if (found.length > 0) {
+                // Filter and score potential messages
+                const filtered = Array.from(found).filter(el => {
+                    const text = extractTextFromElement(el);
+                    // More lenient filtering - any element with some text
+                    return text.length > 5 && text.length < 10000;
+                });
+                
+                if (filtered.length > 0) {
+                    // Score based on likely message patterns
+                    let score = filtered.length;
+                    
+                    // Boost score for elements that look like user/AI messages
+                    const pairsFound = filtered.filter(el => {
+                        const className = el.className || '';
+                        const dataAttrs = Array.from(el.attributes).map(attr => attr.name + '=' + attr.value).join(' ');
+                        return (
+                            className.includes('user') ||
+                            className.includes('claude') ||
+                            className.includes('message') ||
+                            dataAttrs.includes('message') ||
+                            dataAttrs.includes('user') ||
+                            dataAttrs.includes('assistant')
+                        );
+                    }).length;
+                    
+                    score += pairsFound * 10; // Heavily weight elements that look like messages
+                    
+                    console.log(`Claude: "${selector}" scored ${score} (${filtered.length} elements, ${pairsFound} message-like)`);
+                    
+                    if (score > bestScore) {
+                        bestMessages = filtered;
+                        bestSelector = selector;
+                        bestScore = score;
+                    }
+                }
+            }
+        }
+        
+        messages = bestMessages;
+        workingSelector = bestSelector;
+
+        if (messages.length === 0) {
+            console.log('Claude: No messages found with any selector');
+            return conversations;
+        }
+
+        console.log(`Claude: Processing ${messages.length} message elements`);
+        let currentPair = { question: '', answer: '' };
+        
+        for (let i = 0; i < messages.length; i++) {
+            const message = messages[i];
+            const isUser = isUserMessage(message, 'claude');
+            const text = extractTextFromElement(message);
+            
+            console.log(`Claude: Message ${i}: isUser=${isUser}, textLength=${text.length}, text="${text.substring(0, 50)}..."`);
+            
+            if (text.trim() && text.length > 5) { // Lowered threshold like ChatGPT
+                if (isUser) {
+                    // If we have a previous pair, save it
+                    if (currentPair.question && currentPair.answer) {
+                        conversations.push({
+                            id: conversations.length + 1,
+                            question: currentPair.question,
+                            answer: currentPair.answer,
+                            timestamp: new Date().toISOString(),
+                            questionElement: currentPair.questionElement,
+                            answerElement: currentPair.answerElement
+                        });
+                        console.log(`Claude: ✅ Saved conversation pair ${conversations.length}`);
+                    }
+                    // Start new pair
+                    currentPair = { question: text, answer: '', questionElement: message };
+                    console.log(`Claude: 👤 Started new user question: "${text.substring(0, 50)}..."`);
+                } else if (currentPair.question) {
+                    // This is Claude response
+                    currentPair.answer = text;
+                    currentPair.answerElement = message;
+                    console.log(`Claude: 🤖 Added Claude answer: "${text.substring(0, 50)}..."`);
+                }
+            } else if (text.trim()) {
+                console.log(`Claude: ⚠️ Skipped short text (${text.length} chars): "${text}"`);
+            }
+        }
+        
+        // Add the last pair if complete
+        if (currentPair.question && currentPair.answer) {
+            conversations.push({
+                id: conversations.length + 1,
+                question: currentPair.question,
+                answer: currentPair.answer,
+                timestamp: new Date().toISOString(),
+                questionElement: currentPair.questionElement,
+                answerElement: currentPair.answerElement
+            });
+        }
+        
+        console.log(`Claude: Extracted ${conversations.length} conversations`);
+        return conversations;
+    }
+
+    // Helper function to detect user messages
+    function isUserMessage(element, site) {
+        const className = element.className || '';
+        const dataAttrs = Array.from(element.attributes).map(attr => attr.name + '=' + attr.value).join(' ');
+        
+        switch (site) {
+            case 'chatgpt':
+                return (
+                    dataAttrs.includes('user') ||
+                    dataAttrs.includes('data-message-author-role=user') ||
+                    className.includes('user') ||
+                    element.querySelector('[data-message-author-role="user"]') ||
+                    element.closest('[data-message-author-role="user"]') ||
+                    element.hasAttribute('data-message-author-role') && element.getAttribute('data-message-author-role') === 'user'
+                );
+                
+            case 'claude':
+                const isClaudeUser = (
+                    // Modern Claude patterns (2024-2025)
+                    className.includes('font-user-message') ||
+                    className.includes('user') ||
+                    className.includes('Human') ||
+                    className.includes('human') ||
+                    // Data attribute patterns
+                    dataAttrs.includes('user') ||
+                    dataAttrs.includes('User') ||
+                    dataAttrs.includes('Human') ||
+                    dataAttrs.includes('human') ||
+                    dataAttrs.includes('user-message') ||
+                    dataAttrs.includes('data-testid="user') ||
+                    // Element relationship patterns
+                    element.querySelector('[class*="user"]') ||
+                    element.querySelector('[class*="User"]') ||
+                    element.querySelector('[class*="font-user"]') ||
+                    element.querySelector('[class*="human"]') ||
+                    element.querySelector('[class*="Human"]') ||
+                    element.closest('[data-testid*="user"]') ||
+                    element.closest('[class*="user"]') ||
+                    // Parent/child relationship checks
+                    (element.parentElement && (
+                        element.parentElement.className.includes('user') ||
+                        element.parentElement.className.includes('Human') ||
+                        Array.from(element.parentElement.attributes).some(attr => 
+                            attr.value.includes('user') || attr.value.includes('Human')
+                        )
+                    )) ||
+                    // Text content heuristics for user messages
+                    (() => {
+                        const text = extractTextFromElement(element);
+                        const shortText = text.length < 300;
+                        const hasQuestionMarks = (text.match(/\?/g) || []).length > 0;
+                        const startsWithQuestion = /^(what|how|why|when|where|can you|could you|please|help|explain|tell me)/i.test(text.trim());
+                        return shortText && (hasQuestionMarks || startsWithQuestion);
+                    })()
+                );
+                console.log(`Claude user check: ${isClaudeUser} (class: ${className.substring(0, 50)}, attrs: ${dataAttrs.substring(0, 50)})`);
+                return isClaudeUser;
+
+            case 'gemini':
+                const isGeminiUser = (
+                    // Modern Gemini patterns (2024-2025)
+                    className.includes('user') ||
+                    className.includes('User') ||
+                    className.includes('human') ||
+                    className.includes('Human') ||
+                    className.includes('user-input') ||
+                    // Data attribute patterns
+                    dataAttrs.includes('user') ||
+                    dataAttrs.includes('User') ||
+                    dataAttrs.includes('human') ||
+                    dataAttrs.includes('Human') ||
+                    dataAttrs.includes('user-query') ||
+                    dataAttrs.includes('user-input') ||
+                    dataAttrs.includes('data-message-author-role=user') ||
+                    dataAttrs.includes('data-testid="user') ||
+                    // Element relationship patterns
+                    element.querySelector('[data-test-id="user-query"]') ||
+                    element.querySelector('[class*="user"]') ||
+                    element.querySelector('[class*="User"]') ||
+                    element.querySelector('[class*="human"]') ||
+                    element.querySelector('[class*="Human"]') ||
+                    element.querySelector('user-input-text') ||
+                    element.closest('[data-testid*="user"]') ||
+                    element.closest('[class*="user"]') ||
+                    element.closest('[data-test-id*="user"]') ||
+                    element.hasAttribute('data-message-author-role') && element.getAttribute('data-message-author-role') === 'user' ||
+                    // Parent/child relationship checks
+                    (element.parentElement && (
+                        element.parentElement.className.includes('user') ||
+                        element.parentElement.className.includes('User') ||
+                        element.parentElement.className.includes('human') ||
+                        element.parentElement.className.includes('Human') ||
+                        Array.from(element.parentElement.attributes).some(attr => 
+                            attr.value.includes('user') || attr.value.includes('User') || attr.value.includes('human') || attr.value.includes('Human')
+                        )
+                    )) ||
+                    // Text content heuristics for user messages
+                    (() => {
+                        const text = extractTextFromElement(element);
+                        const shortText = text.length < 300;
+                        const hasQuestionMarks = (text.match(/\?/g) || []).length > 0;
+                        const startsWithQuestion = /^(what|how|why|when|where|can you|could you|please|help|explain|tell me|show me|generate|create)/i.test(text.trim());
+                        return shortText && (hasQuestionMarks || startsWithQuestion);
+                    })()
+                );
+                console.log(`Gemini user check: ${isGeminiUser} (class: ${className.substring(0, 50)}, attrs: ${dataAttrs.substring(0, 50)})`);
+                return isGeminiUser;
+                
+            case 'you':
+                return (
+                    className.includes('user') ||
+                    className.includes('human') ||
+                    className.includes('user-message') ||
+                    dataAttrs.includes('user') ||
+                    dataAttrs.includes('human')
+                );
+                
+            case 'bing':
+                return (
+                    className.includes('user') ||
+                    className.includes('human') ||
+                    dataAttrs.includes('user') ||
+                    element.closest('[data-author="user"]')
+                );
+                
+            default:
+                // Generic fallback for unsupported sites
+                return (
+                    className.includes('user') ||
+                    className.includes('human') ||
+                    dataAttrs.includes('user') ||
+                    dataAttrs.includes('human')
+                );
+        }
+    }
+
+    // Helper function to extract clean text
+    function extractTextFromElement(element) {
+        // Remove script tags and other unwanted elements
+        const clone = element.cloneNode(true);
+        const unwantedElements = clone.querySelectorAll('script, style, button, .copy-button, [class*="copy"]');
+        unwantedElements.forEach(el => el.remove());
+        
+        return clone.textContent || clone.innerText || '';
+    }
+
+    // Helper function to sanitize text for serialization
+    function sanitizeText(text) {
+        if (typeof text !== 'string') {
+            text = String(text || '');
+        }
+        
+        // Remove any characters that might cause serialization issues
+        return text
+            .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '') // Remove control characters
+            .replace(/\uFEFF/g, '') // Remove BOM
+            .trim();
+    }
+    
+    // Extract conversations from Gemini/Bard
+    function extractGemini() {
+        console.log('🤖 Gemini: Starting extraction...');
+        const conversations = [];
+        
+        // Modern Gemini selectors (updated for current interface 2024-2025)
+        const messageSelectors = [
+            // Latest Gemini interface patterns (Dec 2024 - Jan 2025)
+            'div[data-message-author-role]',
+            'div[data-message-id]',
+            'div[class*="conversation-turn"]',
+            'div[role="presentation"]',
+            'message-content',
+            'model-response-text',
+            'user-input-text',
+            // Response container patterns
+            'div[class*="response"]',
+            'div[class*="user-input"]',
+            'div[class*="model-response"]',
+            'div[class*="gemini-response"]',
+            'div[class*="bard-response"]',
+            // Test ID patterns
+            '[data-testid*="message"]',
+            '[data-testid*="conversation"]',
+            '[data-testid*="user"]',
+            '[data-testid*="model"]',
+            '[data-testid*="response"]',
+            '[data-testid*="input"]',
+            '[data-testid*="turn"]',
+            // Legacy Google patterns
+            '[data-test-id="user-query"]',
+            '[data-test-id="bot-response"]',
+            '[data-test-id="model-response"]',
+            'div.user-query',
+            'div.bot-response',
+            'div.model-response',
+            // Role-based selectors
+            '[role="article"]',
+            '[role="region"]',
+            '[role="group"]',
+            // Class-based patterns
+            'div[class*="user"]',
+            'div[class*="User"]',
+            'div[class*="model"]',
+            'div[class*="Model"]',
+            'div[class*="assistant"]',
+            'div[class*="Assistant"]',
+            'div[class*="gemini"]',
+            'div[class*="Gemini"]',
+            'div[class*="bard"]',
+            'div[class*="Bard"]',
+            'div[class*="message"]',
+            'div[class*="Message"]',
+            'div[class*="chat"]',
+            'div[class*="Chat"]',
+            'div[class*="conversation"]',
+            'div[class*="Conversation"]',
+            '.conversation-turn',
+            '.message',
+            // Broader content patterns
+            'main div[class]',
+            'main > div > div',
+            'article > div',
+            '[class*="content"]',
+            // Last resort - any substantial div
+            'div'
+        ];
+        
+        let messages = [];
+        let workingSelector = null;
+        
+        // Try each selector and pick the best one (same strategy as Claude)
+        let bestMessages = [];
+        let bestSelector = null;
+        let bestScore = 0;
+        
+        for (const selector of messageSelectors) {
+            const found = document.querySelectorAll(selector);
+            console.log(`Gemini: Selector "${selector}": found ${found.length} elements`);
+            
+            if (found.length > 0) {
+                // Filter and score potential messages
+                const filtered = Array.from(found).filter(el => {
+                    const text = extractTextFromElement(el);
+                    // More lenient filtering - any element with some text
+                    return text.length > 5 && text.length < 10000;
+                });
+                
+                if (filtered.length > 0) {
+                    // Score based on likely message patterns
+                    let score = filtered.length;
+                    
+                    // Boost score for elements that look like user/AI messages
+                    const pairsFound = filtered.filter(el => {
+                        const className = el.className || '';
+                        const dataAttrs = Array.from(el.attributes).map(attr => attr.name + '=' + attr.value).join(' ');
+                        return (
+                            className.includes('user') ||
+                            className.includes('model') ||
+                            className.includes('gemini') ||
+                            className.includes('bard') ||
+                            className.includes('assistant') ||
+                            className.includes('message') ||
+                            className.includes('response') ||
+                            dataAttrs.includes('message') ||
+                            dataAttrs.includes('user') ||
+                            dataAttrs.includes('model') ||
+                            dataAttrs.includes('assistant') ||
+                            dataAttrs.includes('response')
+                        );
+                    }).length;
+                    
+                    score += pairsFound * 10; // Heavily weight elements that look like messages
+                    
+                    console.log(`Gemini: "${selector}" scored ${score} (${filtered.length} elements, ${pairsFound} message-like)`);
+                    
+                    if (score > bestScore) {
+                        bestMessages = filtered;
+                        bestSelector = selector;
+                        bestScore = score;
+                    }
+                }
+            }
+        }
+        
+        messages = bestMessages;
+        workingSelector = bestSelector;
+        
+        if (messages.length > 0) {
+            // Process unified messages (similar to ChatGPT/Claude approach)
+            console.log(`Gemini: Processing ${messages.length} unified message elements`);
+            let currentPair = { question: '', answer: '' };
+            
+            for (let i = 0; i < messages.length; i++) {
+                const message = messages[i];
+                const isUser = isUserMessage(message, 'gemini');
+                const text = extractTextFromElement(message);
+                
+                console.log(`Gemini: Message ${i}: isUser=${isUser}, textLength=${text.length}, text="${text.substring(0, 50)}..."`);
+                
+                if (text.trim() && text.length > 5) { // Lowered threshold
+                    if (isUser) {
+                        if (currentPair.question && currentPair.answer) {
+                            conversations.push({
+                                id: conversations.length + 1,
+                                question: currentPair.question,
+                                answer: currentPair.answer,
+                                timestamp: new Date().toISOString(),
+                                questionElement: currentPair.questionElement,
+                                answerElement: currentPair.answerElement
+                            });
+                            console.log(`Gemini: ✅ Saved conversation pair ${conversations.length}`);
+                        }
+                        currentPair = { question: text, answer: '', questionElement: message };
+                        console.log(`Gemini: 👤 Started new user question: "${text.substring(0, 50)}..."`);
+                    } else if (currentPair.question) {
+                        currentPair.answer = text;
+                        currentPair.answerElement = message;
+                        console.log(`Gemini: 🤖 Added Gemini answer: "${text.substring(0, 50)}..."`);
+                    }
+                } else if (text.trim()) {
+                    console.log(`Gemini: ⚠️ Skipped short text (${text.length} chars): "${text}"`);
+                }
+            }
+            
+            if (currentPair.question && currentPair.answer) {
+                conversations.push({
+                    id: conversations.length + 1,
+                    question: currentPair.question,
+                    answer: currentPair.answer,
+                    timestamp: new Date().toISOString(),
+                    questionElement: currentPair.questionElement,
+                    answerElement: currentPair.answerElement
+                });
+            }
+        } else {
+            // Fallback: try separate user/bot message extraction
+            console.log('Gemini: Trying separate user/bot message extraction');
+            let userMessages = [];
+            let botMessages = [];
+            
+            const userSelectors = ['[data-test-id="user-query"]', '.user-query', '[class*="user"]'];
+            const botSelectors = ['[data-test-id="bot-response"]', '.bot-response', '[class*="model-response"]', '[class*="assistant"]'];
+            
+            for (const selector of userSelectors) {
+                userMessages = document.querySelectorAll(selector);
+                if (userMessages.length > 0) {
+                    console.log(`Gemini: Found ${userMessages.length} user messages with: ${selector}`);
+                    break;
+                }
+            }
+            
+            for (const selector of botSelectors) {
+                botMessages = document.querySelectorAll(selector);
+                if (botMessages.length > 0) {
+                    console.log(`Gemini: Found ${botMessages.length} bot messages with: ${selector}`);
+                    break;
+                }
+            }
+            
+            const minLength = Math.min(userMessages.length, botMessages.length);
+            
+            for (let i = 0; i < minLength; i++) {
+                const question = extractTextFromElement(userMessages[i]);
+                const answer = extractTextFromElement(botMessages[i]);
+                
+                if (question.trim() && answer.trim() && question.length > 10 && answer.length > 10) {
+                    conversations.push({
+                        id: i + 1,
+                        question,
+                        answer,
+                        timestamp: new Date().toISOString(),
+                        questionElement: userMessages[i],
+                        answerElement: botMessages[i]
+                    });
+                }
+            }
+        }
+        
+        console.log(`Gemini: Extracted ${conversations.length} conversations`);
+        return conversations;
+    }
+
+    // Extract conversations from You.com
+    function extractYouCom() {
+        console.log('🤖 You.com: Starting extraction...');
+        const conversations = [];
+        
+        const messageSelectors = [
+            '[data-testid*="message"]',
+            '.chat-message',
+            '[class*="message"]',
+            '.user-message',
+            '.bot-message',
+            '.ai-message'
+        ];
+        
+        let messages = [];
+        for (const selector of messageSelectors) {
+            messages = document.querySelectorAll(selector);
+            if (messages.length > 0) {
+                console.log(`You.com: Found ${messages.length} messages with: ${selector}`);
+                break;
+            }
+        }
+        
+        if (messages.length === 0) {
+            console.log('You.com: No messages found');
+            return conversations;
+        }
+        
+        let currentPair = { question: '', answer: '' };
+        
+        messages.forEach((message) => {
+            const isUser = isUserMessage(message, 'you');
+            const text = extractTextFromElement(message);
+            
+            if (text.trim() && text.length > 10) {
+                if (isUser) {
+                    if (currentPair.question && currentPair.answer) {
+                        conversations.push({
+                            id: conversations.length + 1,
+                            question: currentPair.question,
+                            answer: currentPair.answer,
+                            timestamp: new Date().toISOString()
+                        });
+                    }
+                    currentPair = { question: text, answer: '' };
+                } else if (currentPair.question) {
+                    currentPair.answer = text;
+                }
+            }
+        });
+        
+        if (currentPair.question && currentPair.answer) {
+            conversations.push({
+                id: conversations.length + 1,
+                question: currentPair.question,
+                answer: currentPair.answer,
+                timestamp: new Date().toISOString()
+            });
+        }
+        
+        console.log(`You.com: Extracted ${conversations.length} conversations`);
+        return conversations;
+    }
+
+    // Universal extraction method that works across platforms
+    function extractUniversal() {
+        console.log('🌍 Universal extraction starting...');
+        const conversations = [];
+        
+        // Try all possible message selectors across all platforms
+        const allSelectors = [
+            // ChatGPT
+            '[data-message-author-role]',
+            '[data-testid^="conversation-turn"]',
+            '.group.w-full',
+            '.group',
+            // Claude  
+            '[data-testid*="message"]',
+            'div[class*="font-user-message"]',
+            'div[class*="font-claude-message"]',
+            'div[class*="font-user"]',
+            'div[class*="font-claude"]',
+            '.prose',
+            // Gemini
+            'div[data-message-author-role]',
+            'message-content',
+            'model-response-text',
+            '[data-testid*="user"]',
+            '[data-testid*="model"]',
+            // Generic
+            '[class*="message"]',
+            '[role="article"]',
+            'article'
+        ];
+        
+        let allMessages = [];
+        let workingSelector = null;
+        
+        // Try each selector and collect all potential messages
+        for (const selector of allSelectors) {
+            const found = document.querySelectorAll(selector);
+            if (found.length > 0) {
+                console.log(`Universal: "${selector}": ${found.length} elements`);
+                
+                // Filter for elements with substantial text content
+                const filtered = Array.from(found).filter(el => {
+                    const text = extractTextFromElement(el);
+                    return text.length > 10 && text.length < 10000; // Reasonable text length
+                });
+                
+                if (filtered.length > allMessages.length) {
+                    allMessages = filtered;
+                    workingSelector = selector;
+                }
+            }
+        }
+        
+        if (allMessages.length === 0) {
+            console.log('Universal: No messages found with any selector');
+            return conversations;
+        }
+        
+        console.log(`Universal: Using ${workingSelector} with ${allMessages.length} messages`);
+        
+        // Universal message processing
+        let currentPair = { question: '', answer: '' };
+        let lastWasUser = false;
+        
+        for (let i = 0; i < allMessages.length; i++) {
+            const message = allMessages[i];
+            const text = extractTextFromElement(message);
+            
+            if (text.length < 5) continue; // Skip very short texts
+            
+            // Universal user detection
+            const isUser = isUserMessageUniversal(message, text);
+            
+            console.log(`Universal: Message ${i}: isUser=${isUser}, textLength=${text.length}, text="${text.substring(0, 30)}..."`);
+            
+            if (isUser) {
+                // Save previous pair if complete
+                if (currentPair.question && currentPair.answer) {
+                    conversations.push({
+                        id: conversations.length + 1,
+                        question: currentPair.question,
+                        answer: currentPair.answer,
+                        timestamp: new Date().toISOString(),
+                        questionElement: currentPair.questionElement,
+                        answerElement: currentPair.answerElement
+                    });
+                    console.log(`Universal: ✅ Saved pair ${conversations.length}`);
+                }
+                
+                // Start new pair
+                currentPair = { question: text, answer: '', questionElement: message };
+                lastWasUser = true;
+                console.log(`Universal: 👤 New question: "${text.substring(0, 30)}..."`);
+                
+            } else if (currentPair.question && lastWasUser) {
+                // This should be an AI response
+                currentPair.answer = text;
+                currentPair.answerElement = message;
+                lastWasUser = false;
+                console.log(`Universal: 🤖 AI response: "${text.substring(0, 30)}..."`);
+            }
+        }
+        
+        // Save final pair
+        if (currentPair.question && currentPair.answer) {
+            conversations.push({
+                id: conversations.length + 1,
+                question: currentPair.question,
+                answer: currentPair.answer,
+                timestamp: new Date().toISOString(),
+                questionElement: currentPair.questionElement,
+                answerElement: currentPair.answerElement
+            });
+            console.log(`Universal: ✅ Saved final pair ${conversations.length}`);
+        }
+        
+        console.log(`Universal: Extracted ${conversations.length} conversations`);
+        return conversations;
+    }
+    
+    // Universal user message detection
+    function isUserMessageUniversal(element, text) {
+        const className = element.className || '';
+        const dataAttrs = Array.from(element.attributes).map(attr => attr.name + '=' + attr.value).join(' ');
+        
+        // Check for user indicators across all platforms
+        const userIndicators = [
+            // Data attributes
+            dataAttrs.includes('data-message-author-role=user'),
+            dataAttrs.includes('user'),
+            dataAttrs.includes('human'),
+            dataAttrs.includes('Human'),
+            // Classes
+            className.includes('user'),
+            className.includes('human'),
+            className.includes('Human'),
+            className.includes('font-user'),
+            // Element checks
+            element.querySelector && element.querySelector('[data-message-author-role="user"]'),
+            element.closest && element.closest('[data-testid*="user"]'),
+            element.hasAttribute && element.hasAttribute('data-message-author-role') && element.getAttribute('data-message-author-role') === 'user'
+        ];
+        
+        const isUser = userIndicators.some(indicator => indicator);
+        
+        // Additional heuristics based on text patterns
+        if (!isUser && text.length < 200) {
+            // Short messages are more likely to be user questions
+            const questionPatterns = /^(what|how|why|when|where|can you|could you|please|help|explain)/i;
+            if (questionPatterns.test(text.trim())) {
+                return true;
+            }
+        }
+        
+        return isUser;
+    }
+
+    // Main extraction function with fallbacks
+    function extractConversations() {
+        const hostname = window.location.hostname;
+        console.log('🌐 Extracting conversations from:', hostname);
+        
+        let conversations = [];
+        
+        // Try platform-specific extraction first
+        if (hostname.includes('chatgpt.com') || hostname.includes('chat.openai.com')) {
+            conversations = extractChatGPT();
+        } else if (hostname.includes('claude.ai')) {
+            conversations = extractClaude();
+        } else if (hostname.includes('bard.google.com') || hostname.includes('gemini.google.com')) {
+            conversations = extractGemini();
+        } else if (hostname.includes('you.com')) {
+            conversations = extractYouCom();
+        }
+        
+        // If platform-specific extraction failed, try universal method
+        if (conversations.length === 0) {
+            console.log('🔄 Platform-specific extraction failed, trying universal method...');
+            conversations = extractUniversal();
+        }
+        
+        if (conversations.length === 0) {
+            console.log('🚫 No conversations found with any method');
+        }
+        
+        return conversations;
+    }
+    
+    // Update conversations and send to iframe with retry mechanism
+    function updateConversations(retryCount = 0) {
+        const maxRetries = 3;
+        const conversations = extractConversations();
+        currentConversations = conversations;
+        
+        const iframe = document.querySelector('#ai-chat-navigator-extension iframe');
+        console.log(`📤 Attempt ${retryCount + 1}: Sending ${conversations.length} conversations to iframe. Iframe found:`, !!iframe);
+        
+        if (!iframe) {
+            console.log('❌ No iframe found');
+            return;
+        }
+
+        if (!iframe.contentWindow) {
+            console.log('❌ Iframe contentWindow not available');
+            if (retryCount < maxRetries) {
+                console.log(`🔄 Retrying in 1 second... (${retryCount + 1}/${maxRetries})`);
+                setTimeout(() => updateConversations(retryCount + 1), 1000);
+            }
+            return;
+        }
+        
+        try {
+            // Ultra-safe data cleaning with multiple fallback strategies
+            const cleanConversations = [];
+            
+            for (let i = 0; i < conversations.length; i++) {
+                const conv = conversations[i];
+                
+                try {
+                    // Extract only primitive values, no objects or DOM elements
+                    let cleanQuestion = '';
+                    let cleanAnswer = '';
+                    let cleanId = i + 1;
+                    let cleanTimestamp = new Date().toISOString();
+                    
+                    // Extra-safe text extraction
+                    if (conv.question) {
+                        cleanQuestion = String(conv.question);
+                        // Remove any potential problematic characters
+                        cleanQuestion = cleanQuestion
+                            .replace(/[\x00-\x1F\x7F-\x9F]/g, '') // Remove control characters
+                            .replace(/[\uFEFF\u200B-\u200D\u2060]/g, '') // Remove zero-width chars
+                            .replace(/\uFFFD/g, '') // Remove replacement chars
+                            .trim();
+                    }
+                    
+                    if (conv.answer) {
+                        cleanAnswer = String(conv.answer);
+                        cleanAnswer = cleanAnswer
+                            .replace(/[\x00-\x1F\x7F-\x9F]/g, '')
+                            .replace(/[\uFEFF\u200B-\u200D\u2060]/g, '')
+                            .replace(/\uFFFD/g, '')
+                            .trim();
+                    }
+                    
+                    if (conv.id && typeof conv.id === 'number') {
+                        cleanId = conv.id;
+                    }
+                    
+                    if (conv.timestamp && typeof conv.timestamp === 'string') {
+                        cleanTimestamp = conv.timestamp;
+                    }
+                    
+                    // Only include conversations with valid Q&A
+                    if (cleanQuestion.length > 0 && cleanAnswer.length > 0) {
+                        const cleanConv = {
+                            id: cleanId,
+                            question: cleanQuestion,
+                            answer: cleanAnswer,
+                            timestamp: cleanTimestamp
+                        };
+                        
+                        // Test serialization before adding
+                        JSON.stringify(cleanConv);
+                        cleanConversations.push(cleanConv);
+                    }
+                    
+                } catch (convError) {
+                    console.warn(`⚠️ Skipping conversation ${i} due to cleaning error:`, convError.message);
+                    continue;
+                }
+            }
+
+            if (cleanConversations.length === 0) {
+                console.log('⚠️ No valid conversations after cleaning');
+                return;
+            }
+
+            console.log(`✅ Cleaned ${cleanConversations.length} conversations successfully`);
+
+            // Ultra-safe message sending with multiple error handling layers
+            const messageData = {
+                type: 'UPDATE_CONVERSATIONS',
+                conversations: cleanConversations,
+                timestamp: Date.now(),
+                source: 'ai-chat-navigator'
+            };
+            
+            // Final serialization test
+            const serializedData = JSON.stringify(messageData);
+            console.log(`📤 Sending ${serializedData.length} characters to iframe`);
+            
+            iframe.contentWindow.postMessage(messageData, '*');
+            
+            console.log('✅ Message sent successfully:', {
+                conversations: conversations.length,
+                timestamp: new Date().toLocaleTimeString()
+            });
+            
+            // Wait for confirmation from iframe (handled by message listener)
+            const confirmationTimeout = setTimeout(() => {
+                if (retryCount < maxRetries) {
+                    console.log('⚠️ No confirmation received, retrying...');
+                    updateConversations(retryCount + 1);
+                }
+            }, 3000);
+            
+            // Clear timeout if confirmation is received
+            window.pendingConfirmations = window.pendingConfirmations || new Map();
+            window.pendingConfirmations.set(Date.now(), confirmationTimeout);
+            
+        } catch (error) {
+            console.error('❌ Error sending message:', error);
+            console.error('Error details:', {
+                message: error.message,
+                name: error.name,
+                stack: error.stack
+            });
+            if (retryCount < maxRetries) {
+                console.log(`🔄 Retrying in 2 seconds... (${retryCount + 1}/${maxRetries})`);
+                setTimeout(() => updateConversations(retryCount + 1), 2000);
+            }
+        }
+    }
+
+    // Scroll to a specific conversation with enhanced navigation and smooth transitions
+    function scrollToConversation(conversationId) {
+        console.log('🎯 Attempting to scroll to conversation:', conversationId);
+        const conversations = currentConversations;
+        const conversation = conversations.find(c => c.id === conversationId);
+        
+        if (conversation && conversation.questionElement) {
+            console.log('📍 Found conversation element, starting smooth transition...');
+            
+            // Get current scroll position for smooth transition
+            const startPosition = window.pageYOffset;
+            const elementPosition = conversation.questionElement.offsetTop;
+            const offsetPosition = elementPosition - (window.innerHeight / 2) + (conversation.questionElement.offsetHeight / 2);
+            
+            // Smooth scroll animation
+            const duration = 800; // 0.8 seconds
+            let start = null;
+            
+            function smoothScrollAnimation(currentTime) {
+                if (start === null) start = currentTime;
+                const timeElapsed = currentTime - start;
+                const progress = Math.min(timeElapsed / duration, 1);
+                
+                // Easing function for smooth acceleration/deceleration
+                const ease = progress < 0.5 
+                    ? 2 * progress * progress 
+                    : -1 + (4 - 2 * progress) * progress;
+                
+                window.scrollTo(0, startPosition + (offsetPosition - startPosition) * ease);
+                
+                if (progress < 1) {
+                    requestAnimationFrame(smoothScrollAnimation);
+                } else {
+                    // Animation complete - start highlighting
+                    startHighlightAnimation();
+                }
+            }
+            
+            function startHighlightAnimation() {
+                const element = conversation.questionElement;
+                const originalStyle = {
+                    backgroundColor: element.style.backgroundColor,
+                    transition: element.style.transition,
+                    boxShadow: element.style.boxShadow,
+                    transform: element.style.transform,
+                    border: element.style.border
+                };
+                
+                // Dramatic highlight animation with scaling and pulsing
+                element.style.transition = 'all 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94)';
+                element.style.backgroundColor = '#fff3cd';
+                element.style.boxShadow = '0 0 30px rgba(255, 193, 7, 0.7), 0 0 60px rgba(255, 193, 7, 0.3)';
+                element.style.transform = 'scale(1.02)';
+                element.style.border = '2px solid #fbbf24';
+                
+                // Pulse effect
+                setTimeout(() => {
+                    element.style.transform = 'scale(1.01)';
+                    element.style.boxShadow = '0 0 20px rgba(255, 193, 7, 0.5)';
+                }, 300);
+                
+                setTimeout(() => {
+                    element.style.transform = 'scale(1.02)';
+                    element.style.boxShadow = '0 0 25px rgba(255, 193, 7, 0.6)';
+                }, 600);
+                
+                // Also highlight the answer with coordinated animation
+                if (conversation.answerElement) {
+                    setTimeout(() => {
+                        const answerElement = conversation.answerElement;
+                        const originalAnswerStyle = {
+                            backgroundColor: answerElement.style.backgroundColor,
+                            transition: answerElement.style.transition,
+                            boxShadow: answerElement.style.boxShadow,
+                            transform: answerElement.style.transform
+                        };
+                        
+                        answerElement.style.transition = 'all 0.5s ease-in-out';
+                        answerElement.style.backgroundColor = '#e7f3ff';
+                        answerElement.style.boxShadow = '0 0 20px rgba(59, 130, 246, 0.3)';
+                        answerElement.style.transform = 'scale(1.005)';
+                        
+                        setTimeout(() => {
+                            answerElement.style.backgroundColor = originalAnswerStyle.backgroundColor;
+                            answerElement.style.transition = originalAnswerStyle.transition;
+                            answerElement.style.boxShadow = originalAnswerStyle.boxShadow;
+                            answerElement.style.transform = originalAnswerStyle.transform;
+                        }, 2500);
+                    }, 400);
+                }
+                
+                // Remove highlight after delay with smooth fade out
+                setTimeout(() => {
+                    element.style.transition = 'all 0.8s ease-out';
+                    element.style.backgroundColor = originalStyle.backgroundColor;
+                    element.style.boxShadow = originalStyle.boxShadow;
+                    element.style.transform = originalStyle.transform;
+                    element.style.border = originalStyle.border;
+                    
+                    // Final cleanup
+                    setTimeout(() => {
+                        element.style.transition = originalStyle.transition;
+                    }, 800);
+                }, 2000);
+            }
+            
+            // Start the smooth scroll animation
+            requestAnimationFrame(smoothScrollAnimation);
+            
+            // Try to focus the element for accessibility
+            setTimeout(() => {
+                try {
+                    if (conversation.questionElement.tabIndex < 0) {
+                        conversation.questionElement.tabIndex = -1;
+                    }
+                    conversation.questionElement.focus();
+                } catch (error) {
+                    console.log('Could not focus element:', error.message);
+                }
+            }, duration + 100);
+            
+            console.log('✅ Started smooth scroll transition');
+        } else {
+            console.log('❌ Could not find conversation element for ID:', conversationId);
+            
+            // Fallback: try to re-extract conversations and find the element
+            console.log('🔄 Attempting to re-extract conversations...');
+            const freshConversations = extractConversations();
+            const freshConversation = freshConversations.find(c => c.id === conversationId);
+            
+            if (freshConversation && freshConversation.questionElement) {
+                console.log('✅ Found conversation in fresh extraction, using fallback scroll...');
+                freshConversation.questionElement.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'center'
+                });
+            } else {
+                console.log('❌ Conversation not found even after re-extraction');
+            }
+        }
+    }
+    
+    // Create and inject the extension UI
+    function injectNavigator() {
+        if (document.querySelector('#ai-chat-navigator-extension')) {
+            return;
+        }
+        
+        // Create container
+        const container = document.createElement('div');
+        container.id = 'ai-chat-navigator-extension';
+        container.style.cssText = `
+            position: fixed;
+            top: 0;
+            right: 0;
+            width: 400px;
+            height: 100%;
+            background: white;
+            border-left: 1px solid #e5e7eb;
+            box-shadow: -4px 0 24px rgba(0, 0, 0, 0.1);
+            z-index: 10000;
+            transform: translateX(100%);
+            transition: transform 0.3s ease;
+        `;
+        
+        // Create toggle button
+        const toggleButton = document.createElement('button');
+        toggleButton.innerHTML = '📋';
+        toggleButton.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 50px;
+            height: 50px;
+            background: #4f46e5;
+            color: white;
+            border: none;
+            border-radius: 25px;
+            font-size: 20px;
+            cursor: pointer;
+            z-index: 10001;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        `;
+        
+        // Toggle functionality
+        let isOpen = false;
+        toggleButton.addEventListener('click', () => {
+            isOpen = !isOpen;
+            container.style.transform = isOpen ? 'translateX(0)' : 'translateX(100%)';
+            toggleButton.style.right = isOpen ? '420px' : '20px';
+        });
+        
+        // Create iframe for React app
+        const iframe = document.createElement('iframe');
+        iframe.style.cssText = `
+            width: 100%;
+            height: 100%;
+            border: none;
+        `;
+        iframe.src = chrome.runtime.getURL('index.html');
+        
+        container.appendChild(iframe);
+        document.body.appendChild(container);
+        document.body.appendChild(toggleButton);
+        
+        // Send conversations when iframe loads
+        iframe.onload = () => {
+            console.log('📱 Iframe loaded, sending conversations...');
+            
+            setTimeout(() => {
+                console.log('⏰ Delayed conversation update starting...');
+                updateConversations();
+            }, 1000); // Increased delay to ensure app is ready
+            
+            // Listen for messages from iframe (only set up once)
+            if (!window.aiChatNavigatorMessageListener) {
+                window.aiChatNavigatorMessageListener = (event) => {
+                    console.log('📨 Content script received message:', event.data);
+                    
+                    if (event.data.type === 'CONVERSATIONS_RECEIVED') {
+                        console.log('✅ Iframe confirmed receiving conversations:', event.data.count);
+                        
+                        // Clear any pending confirmation timeouts
+                        if (window.pendingConfirmations) {
+                            window.pendingConfirmations.forEach((timeout, timestamp) => {
+                                clearTimeout(timeout);
+                            });
+                            window.pendingConfirmations.clear();
+                        }
+                    } else if (event.data.type === 'SCROLL_TO_CONVERSATION') {
+                        console.log('🖱️ Scroll to conversation requested:', event.data.conversationId);
+                        scrollToConversation(event.data.conversationId);
+                    } else if (event.data === 'close') {
+                        console.log('❌ Close drawer requested');
+                        const container = document.querySelector('#ai-chat-navigator-extension');
+                        const toggleBtns = document.querySelectorAll('button');
+                        let toggleBtn = null;
+                        
+                        // Find the toggle button by looking for the one with the clipboard emoji
+                        for (const btn of toggleBtns) {
+                            if (btn.innerHTML === '📋' && btn.style.position === 'fixed') {
+                                toggleBtn = btn;
+                                break;
+                            }
+                        }
+                        
+                        if (container && toggleBtn) {
+                            container.style.transform = 'translateX(100%)';
+                            toggleBtn.style.right = '20px';
+                            console.log('✅ Drawer closed');
+                        }
+                    }
+                };
+                
+                window.addEventListener('message', window.aiChatNavigatorMessageListener);
+                console.log('📡 Message listener set up');
+            }
+        };
+    }
+    
+    // Pre-load existing conversations on page load
+    function preloadExistingConversations() {
+        console.log('🔄 Pre-loading existing conversations...');
+        
+        // Multiple attempts to ensure page is fully loaded
+        const attemptExtraction = (attemptNumber) => {
+            console.log(`📖 Pre-load attempt ${attemptNumber}/5`);
+            const conversations = extractConversations();
+            
+            if (conversations.length > 0) {
+                console.log(`✅ Pre-loaded ${conversations.length} existing conversations`);
+                currentConversations = conversations;
+                
+                // Send to iframe if it's ready
+                const iframe = document.querySelector('#ai-chat-navigator-extension iframe');
+                if (iframe && iframe.contentWindow) {
+                    updateConversations();
+                }
+                return true;
+            } else if (attemptNumber < 5) {
+                // Try again with increasing delays
+                const delay = attemptNumber * 1000;
+                setTimeout(() => attemptExtraction(attemptNumber + 1), delay);
+            } else {
+                console.log('📭 No existing conversations found after 5 attempts');
+            }
+            return false;
+        };
+        
+        // Start immediate extraction for already loaded content
+        if (document.readyState === 'complete') {
+            attemptExtraction(1);
+        } else {
+            // Wait for page to load completely
+            window.addEventListener('load', () => {
+                setTimeout(() => attemptExtraction(1), 500);
+            });
+            
+            // Also try when DOM is ready
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', () => {
+                    setTimeout(() => attemptExtraction(1), 1000);
+                });
+            }
+        }
+    }
+
+    // Start monitoring for conversation changes with enhanced pre-loading
+    function startMonitoring() {
+        // Pre-load existing conversations first
+        preloadExistingConversations();
+        
+        // Continue with regular monitoring
+        setTimeout(() => {
+            updateConversations();
+        }, 3000); // Slightly longer initial delay to allow pre-loading
+        
+        // Monitor for changes with enhanced detection for all platforms
+        const observer = new MutationObserver((mutations) => {
+            let shouldUpdate = false;
+            let changeDescription = '';
+            
+            for (const mutation of mutations) {
+                if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+                    // Check if any added nodes might be new messages
+                    for (const node of mutation.addedNodes) {
+                        if (node.nodeType === Node.ELEMENT_NODE) {
+                            // Comprehensive message pattern detection for all platforms
+                            const hasMessagePattern = (
+                                node.matches && (
+                                    // ChatGPT patterns
+                                    node.matches('[data-message-author-role]') ||
+                                    node.matches('[data-testid*="conversation-turn"]') ||
+                                    node.matches('.group.w-full') ||
+                                    node.matches('.group') ||
+                                    // Claude patterns
+                                    node.matches('[data-testid*="message"]') ||
+                                    node.matches('div[class*="font-user"]') ||
+                                    node.matches('div[class*="font-claude"]') ||
+                                    node.matches('.prose') ||
+                                    // Gemini patterns  
+                                    node.matches('div[data-message-author-role]') ||
+                                    node.matches('message-content') ||
+                                    node.matches('model-response-text') ||
+                                    // Generic patterns
+                                    node.matches('[class*="message"]') ||
+                                    node.matches('[role="article"]')
+                                )
+                            ) || (
+                                node.querySelector && (
+                                    // ChatGPT patterns
+                                    node.querySelector('[data-message-author-role]') ||
+                                    node.querySelector('[data-testid*="conversation-turn"]') ||
+                                    node.querySelector('.group.w-full') ||
+                                    node.querySelector('.group') ||
+                                    // Claude patterns
+                                    node.querySelector('[data-testid*="message"]') ||
+                                    node.querySelector('div[class*="font-user"]') ||
+                                    node.querySelector('div[class*="font-claude"]') ||
+                                    node.querySelector('.prose') ||
+                                    // Gemini patterns
+                                    node.querySelector('div[data-message-author-role]') ||
+                                    node.querySelector('message-content') ||
+                                    node.querySelector('model-response-text') ||
+                                    // Generic patterns
+                                    node.querySelector('[class*="message"]') ||
+                                    node.querySelector('[role="article"]')
+                                )
+                            );
+                            
+                            if (hasMessagePattern) {
+                                shouldUpdate = true;
+                                changeDescription = `New message detected: ${node.tagName} with class "${node.className?.substring(0, 50)}"`;
+                                break;
+                            }
+                        }
+                    }
+                    if (shouldUpdate) break;
+                }
+            }
+            
+            if (shouldUpdate) {
+                // Debounce updates to avoid excessive calls
+                clearTimeout(window.conversationUpdateTimer);
+                window.conversationUpdateTimer = setTimeout(() => {
+                    console.log('🔄 Detected conversation changes:', changeDescription);
+                    updateConversations();
+                }, 1500); // Slightly longer delay to ensure content is fully rendered
+            }
+        });
+        
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: false
+        });
+        
+        // Periodic check with longer interval
+        setInterval(() => {
+            const currentCount = currentConversations.length;
+            updateConversations();
+            
+            // Log only if count changed
+            setTimeout(() => {
+                if (currentConversations.length !== currentCount) {
+                    console.log(`📊 Periodic check: ${currentCount} → ${currentConversations.length} conversations`);
+                }
+            }, 500);
+        }, 10000); // Reduced frequency to 10 seconds
+    }
+    
+    // Initialize everything with enhanced loading
+    function initialize() {
+        console.log('🚀 AI Chat Navigator: Initializing on', window.location.hostname);
+        
+        // Inject UI first
+        setTimeout(() => {
+            injectNavigator();
+            
+            // Start monitoring after UI is ready
+            setTimeout(() => {
+                startMonitoring();
+            }, 500);
+        }, 1000);
+        
+        // Also try pre-loading conversations immediately if page is already loaded
+        if (document.readyState === 'complete') {
+            setTimeout(() => {
+                console.log('🔄 Page already complete, attempting immediate pre-load...');
+                preloadExistingConversations();
+            }, 2000);
+        }
+    }
+    
+    // Start when page is ready with multiple entry points
+    if (document.readyState === 'loading') {
+        console.log('📄 DOM still loading, waiting...');
+        document.addEventListener('DOMContentLoaded', initialize);
+    } else if (document.readyState === 'interactive') {
+        console.log('📄 DOM interactive, initializing...');
+        initialize();
+    } else {
+        console.log('📄 DOM complete, initializing immediately...');
+        initialize();
+    }
+    
+    // Auto-run aggressive debugging after page loads to understand what text is available
+    setTimeout(() => {
+        if (window.findAllTextElements) {
+            console.log('🔍 AUTO-RUNNING AGGRESSIVE DEBUG:');
+            window.findAllTextElements();
+        }
+        
+        if (window.debugAIChatNavigator) {
+            console.log('🔍 AUTO-RUNNING STANDARD DEBUG:');
+            window.debugAIChatNavigator();
+        }
+    }, 5000); // Wait 5 seconds for page to fully load
+    
+    // Additional safety net for SPA navigation
+    let lastUrl = window.location.href;
+    setInterval(() => {
+        if (window.location.href !== lastUrl) {
+            console.log('🔄 URL changed, re-initializing...');
+            lastUrl = window.location.href;
+            
+            // Clear any existing timers
+            if (window.conversationUpdateTimer) {
+                clearTimeout(window.conversationUpdateTimer);
+            }
+            
+            // Re-initialize after a short delay
+            setTimeout(initialize, 2000);
+        }
+    }, 3000);
+    
+    // Aggressive debugging function to find ANY text content
+    window.findAllTextElements = function() {
+        console.log('🔍 AGGRESSIVE DEBUG: Finding all text elements...');
+        
+        // Get all elements with text content
+        const allElements = document.querySelectorAll('*');
+        const textElements = [];
+        
+        for (let el of allElements) {
+            const text = (el.textContent || '').trim();
+            if (text.length > 20 && text.length < 2000) {
+                // Skip if text is the same as parent (avoid duplicates)
+                const parentText = (el.parentElement?.textContent || '').trim();
+                if (text !== parentText || !el.parentElement) {
+                    textElements.push({
+                        element: el,
+                        text: text,
+                        tagName: el.tagName,
+                        className: el.className,
+                        id: el.id,
+                        attributes: Array.from(el.attributes).map(a => `${a.name}="${a.value}"`).join(' ')
+                    });
+                }
+            }
+        }
+        
+        console.log(`Found ${textElements.length} elements with substantial text`);
+        
+        // Group by likely patterns
+        const userLike = textElements.filter(el => 
+            el.className.includes('user') || 
+            el.attributes.includes('user') ||
+            el.text.match(/^(what|how|why|can you|please|help me)/i)
+        );
+        
+        const aiLike = textElements.filter(el => 
+            el.text.length > 100 && 
+            !el.className.includes('user') &&
+            !el.attributes.includes('user')
+        );
+        
+        console.log(`Potentially user messages: ${userLike.length}`);
+        userLike.slice(0, 3).forEach((el, i) => {
+            console.log(`User ${i}:`, el.text.substring(0, 100), el);
+        });
+        
+        console.log(`Potentially AI messages: ${aiLike.length}`);
+        aiLike.slice(0, 3).forEach((el, i) => {
+            console.log(`AI ${i}:`, el.text.substring(0, 100), el);
+        });
+        
+        return { all: textElements, user: userLike, ai: aiLike };
+    };
+
+    // Debug function for testing - available in console as window.debugAIChatNavigator()
+    window.debugAIChatNavigator = function() {
+        console.log('🔍 AI Chat Navigator Debug Info:');
+        console.log('Current URL:', window.location.href);
+        console.log('Extension container:', !!document.querySelector('#ai-chat-navigator-extension'));
+        console.log('Current conversations:', currentConversations.length);
+        
+        // Test extraction with detailed debugging
+        console.log('Testing extraction...');
+        const testConversations = extractConversations();
+        console.log('Fresh extraction result:', testConversations.length, 'conversations');
+        
+        if (testConversations.length > 0) {
+            testConversations.forEach((conv, idx) => {
+                console.log(`Conversation ${idx + 1}:`, {
+                    id: conv.id,
+                    question: conv.question.substring(0, 50) + '...',
+                    answer: conv.answer.substring(0, 50) + '...',
+                    hasElements: !!(conv.questionElement && conv.answerElement)
+                });
+            });
+        } else {
+            // Deep debugging for failed extractions
+            console.log('🔍 Deep debugging - no conversations found');
+            
+            // Test selectors for current site
+            const hostname = window.location.hostname;
+            if (hostname.includes('chatgpt.com')) {
+                console.log('Testing ChatGPT selectors:');
+                const selectors = [
+                    '[data-message-author-role]',
+                    '[data-testid^="conversation-turn"]',
+                    '[data-testid*="conversation-turn"]',
+                    '.group.w-full.text-token-text-primary',
+                    '.group.w-full',
+                    '.group'
+                ];
+                
+                selectors.forEach(sel => {
+                    const elements = document.querySelectorAll(sel);
+                    console.log(`"${sel}": ${elements.length} elements`);
+                    if (elements.length > 0 && elements.length < 10) {
+                        Array.from(elements).slice(0, 3).forEach((el, i) => {
+                            console.log(`  ${i}: "${el.textContent?.substring(0, 100)}..."`, el);
+                        });
+                    }
+                });
+            } else if (hostname.includes('claude.ai')) {
+                console.log('Testing Claude selectors:');
+                const selectors = [
+                    '[data-testid*="message"]',
+                    'div[class*="font-user"]',
+                    'div[class*="font-claude"]',
+                    '.prose',
+                    'div[class*="message"]'
+                ];
+                
+                selectors.forEach(sel => {
+                    const elements = document.querySelectorAll(sel);
+                    console.log(`"${sel}": ${elements.length} elements`);
+                    if (elements.length > 0 && elements.length < 20) {
+                        Array.from(elements).slice(0, 3).forEach((el, i) => {
+                            console.log(`  ${i}: "${el.textContent?.substring(0, 100)}..."`, el);
+                        });
+                    }
+                });
+            } else if (hostname.includes('gemini.google.com')) {
+                console.log('Testing Gemini selectors:');
+                const selectors = [
+                    '[data-testid*="message"]',
+                    '[role="presentation"]',
+                    '[class*="user"]',
+                    '[class*="model-response"]',
+                    '.message'
+                ];
+                
+                selectors.forEach(sel => {
+                    const elements = document.querySelectorAll(sel);
+                    console.log(`"${sel}": ${elements.length} elements`);
+                    if (elements.length > 0 && elements.length < 20) {
+                        Array.from(elements).slice(0, 3).forEach((el, i) => {
+                            console.log(`  ${i}: "${el.textContent?.substring(0, 100)}..."`, el);
+                        });
+                    }
+                });
+            }
+        }
+        
+        // Test iframe communication
+        const iframe = document.querySelector('#ai-chat-navigator-extension iframe');
+        console.log('Iframe found:', !!iframe);
+        if (iframe) {
+            console.log('Iframe contentWindow:', !!iframe.contentWindow);
+            console.log('Iframe src:', iframe.src);
+        }
+        
+        return {
+            conversations: testConversations,
+            currentCount: currentConversations.length,
+            hasIframe: !!iframe,
+            url: window.location.href
+        };
+    };
+
+    // Manual refresh function for users
+    window.refreshAIChatNavigator = function() {
+        console.log('🔄 Manual refresh triggered...');
+        updateConversations();
+        console.log('✅ Refresh completed');
+    };
+    
+})();

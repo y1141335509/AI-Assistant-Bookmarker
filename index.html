@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>AI Chat Navigator - Chrome Extension Canvas</title>
+    <meta name="description" content="Chrome extension to help navigate long AI conversations with organized question and answer drawer">
+    <meta name="keywords" content="chrome extension, AI chat, conversation navigator, ChatGPT, Claude">
+    <meta property="og:title" content="AI Chat Navigator - Chrome Extension Canvas">
+    <meta property="og:description" content="Chrome extension to help navigate long AI conversations with organized question and answer drawer">
+    <meta name="twitter:title" content="AI Chat Navigator - Chrome Extension Canvas">
+    <meta name="twitter:description" content="Chrome extension to help navigate long AI conversations with organized question and answer drawer">
+
+    <link href="lib/tailwind.css" rel="stylesheet">
+    
+
+    <!-- Predefined Tailwind CSS, use it as needed, or update base on your -->
+    <style type="text/tailwindcss">
+    @layer theme {
+        :root {
+            --primary-color: #4f46e5;
+            --secondary-color: #f8fafc;
+            --accent-color: #06b6d4;
+            --text-primary: #1e293b;
+            --text-secondary: #64748b;
+            --border-color: #e2e8f0;
+            --drawer-width: 320px;
+        }
+    }
+
+    @layer base {
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            color: var(--text-primary);
+        }
+    }
+
+    @layer components {
+        .extension-drawer {
+            width: var(--drawer-width);
+            background: white;
+            border-left: 1px solid var(--border-color);
+            box-shadow: -4px 0 24px rgba(0, 0, 0, 0.1);
+        }
+        
+        .nav-item {
+            @apply p-3 border-b border-gray-100 cursor-pointer hover:bg-gray-50 transition-colors;
+        }
+        
+        .nav-item:hover {
+            background-color: var(--secondary-color);
+        }
+        
+        .btn-primary {
+            @apply px-4 py-2 rounded-lg font-medium transition-colors;
+            background-color: var(--primary-color);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background-color: #3730a3;
+        }
+        
+        .btn-secondary {
+            @apply px-4 py-2 rounded-lg font-medium border transition-colors;
+            border-color: var(--border-color);
+            color: var(--text-primary);
+        }
+        
+        .btn-secondary:hover {
+            background-color: var(--secondary-color);
+        }
+    }
+
+    @layer utilities {
+        .text-shadow {
+            text-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+    }
+    </style>
+
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script defer src="app-simple.js"></script>
+</body>
+</html>
