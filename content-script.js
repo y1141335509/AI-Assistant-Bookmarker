@@ -12,211 +12,93 @@
         console.log('🤖 ChatGPT: Starting extraction...');
         const conversations = [];
         
-        // Enhanced selectors for ChatGPT (2024-2025 interface)
-        const messageSelectors = [
-            // Primary modern ChatGPT selectors
-            '[data-message-author-role]',
-            '[data-message-id]',
-            '[data-testid^="conversation-turn"]', 
-            '[data-testid*="conversation-turn"]',
-            '[data-testid*="message"]',
-            // Group patterns
-            '.group.w-full.text-token-text-primary',
-            '.group.w-full.text-gray-800',
-            '.group.w-full',
-            'div.group',
-            '.group',
-            // Class-based patterns
-            '[class*="conversation-turn"]',
-            '[class*="message"]',
-            '[class*="chat"]',
-            // Role-based selectors
-            'article',
-            '[role="article"]',
-            '[role="presentation"]',
-            // Broader container patterns
-            'main > div > div',
-            'main div[class*="flex"]',
-            'main div[class*="w-full"]',
-            // Generic with substantial text
-            'main div',
-            'div'
-        ];
-        
-        let messages = [];
-        let workingSelector = null;
-        
-        // Try each selector and pick the best one using scoring system
-        let bestMessages = [];
-        let bestSelector = null;
-        let bestScore = 0;
-        
-        for (const selector of messageSelectors) {
-            const found = document.querySelectorAll(selector);
-            console.log(`ChatGPT: Selector "${selector}": found ${found.length} elements`);
-            
-            if (found.length > 0) {
-                // Filter and score potential messages
-                const filtered = Array.from(found).filter(el => {
-                    const text = extractTextFromElement(el);
-                    // More lenient filtering for ChatGPT
-                    return text.length > 3 && text.length < 50000;
-                });
-                
-                if (filtered.length > 0) {
-                    // Score based on likely message patterns
-                    let score = filtered.length;
-                    
-                    // Boost score for elements that look like user/AI messages
-                    const pairsFound = filtered.filter(el => {
-                        const className = el.className || '';
-                        const dataAttrs = Array.from(el.attributes).map(attr => attr.name + '=' + attr.value).join(' ');
-                        return (
-                            dataAttrs.includes('data-message-author-role') ||
-                            dataAttrs.includes('user') ||
-                            dataAttrs.includes('assistant') ||
-                            dataAttrs.includes('message') ||
-                            className.includes('user') ||
-                            className.includes('group') ||
-                            className.includes('message') ||
-                            el.querySelector('[data-message-author-role]') ||
-                            el.closest('[data-message-author-role]')
-                        );
-                    }).length;
-                    
-                    score += pairsFound * 10; // Heavily weight elements that look like messages
-                    
-                    // Special boost for ChatGPT-specific patterns
-                    if (selector.includes('[data-message-author-role]') || selector.includes('conversation-turn')) {
-                        score += 50;
-                    }
-                    
-                    console.log(`ChatGPT: "${selector}" scored ${score} (${filtered.length} elements, ${pairsFound} message-like)`);
-                    
-                    if (score > bestScore) {
-                        bestMessages = filtered;
-                        bestSelector = selector;
-                        bestScore = score;
-                    }
+        // Try the most specific and reliable approach first
+        try {
+            // Method 1: Use data-message-author-role (most reliable for 2024+ ChatGPT)
+            const messageElements = document.querySelectorAll('[data-message-author-role]');
+            if (messageElements.length > 0) {
+                console.log(`ChatGPT: Found ${messageElements.length} messages with data-message-author-role`);
+                const extracted = extractFromDataMessageRole(Array.from(messageElements));
+                if (extracted.length > 0) {
+                    console.log(`ChatGPT: Successfully extracted ${extracted.length} conversations using data-message-author-role`);
+                    return extracted;
                 }
             }
-        }
-        
-        messages = bestMessages;
-        workingSelector = bestSelector;
-        
-        if (messages.length === 0) {
-            console.log('ChatGPT: No messages found with any selector');
-            return conversations;
-        }
-
-        console.log(`ChatGPT: Processing ${messages.length} message elements`);
-        
-        // Enhanced message processing with better conversation reconstruction
-        let allConversations = [];
-        let userMessages = [];
-        let assistantMessages = [];
-        
-        // First pass: separate user and assistant messages clearly
-        for (let i = 0; i < messages.length; i++) {
-            const message = messages[i];
-            const isUser = isUserMessage(message, 'chatgpt');
-            const text = extractTextFromElement(message);
             
-            console.log(`ChatGPT: Message ${i}: isUser=${isUser}, textLength=${text.length}, text="${text.substring(0, 50)}..."`);
+            // Method 2: Use conversation turn pattern
+            const turnElements = document.querySelectorAll('[data-testid*="conversation-turn"]');
+            if (turnElements.length > 0) {
+                console.log(`ChatGPT: Found ${turnElements.length} conversation turns`);
+                const extracted = extractFromConversationTurns(Array.from(turnElements));
+                if (extracted.length > 0) {
+                    console.log(`ChatGPT: Successfully extracted ${extracted.length} conversations using conversation turns`);
+                    return extracted;
+                }
+            }
             
-            if (text.trim() && text.length > 3) {
-                const messageData = {
-                    element: message,
-                    text: text,
-                    isUser: isUser,
-                    index: i
+            // Method 3: Fallback to group elements in main content area only
+            console.log('ChatGPT: Trying fallback group extraction...');
+            return extractChatGPTFallback();
+            
+        } catch (error) {
+            console.error('ChatGPT extraction error:', error);
+            return [];
+        }
+    }
+    
+    // Extract using data-message-author-role (most reliable method)
+    function extractFromDataMessageRole(elements) {
+        const conversations = [];
+        let currentPair = { question: '', answer: '', questionElement: null, answerElement: null };
+        
+        elements.forEach((element, index) => {
+            const role = element.getAttribute('data-message-author-role');
+            const text = extractTextFromElement(element);
+            
+            // Skip empty or very short content
+            if (!text || text.length < 5) return;
+            
+            // Skip navigation-like content
+            if (isNavigationContent(text)) {
+                console.log('🚫 Skipping navigation content:', text.substring(0, 50));
+                return;
+            }
+            
+            console.log(`ChatGPT: Message ${index}: role=${role}, text="${text.substring(0, 60)}..."`);
+            
+            if (role === 'user') {
+                // Save previous complete pair
+                if (currentPair.question && currentPair.answer) {
+                    if (!isDuplicateConversation(conversations, currentPair.question, currentPair.answer)) {
+                        conversations.push({
+                            id: conversations.length + 1,
+                            question: currentPair.question,
+                            answer: currentPair.answer,
+                            timestamp: new Date().toISOString(),
+                            questionElement: currentPair.questionElement,
+                            answerElement: currentPair.answerElement
+                        });
+                    }
+                }
+                
+                // Start new pair
+                currentPair = {
+                    question: text,
+                    answer: '',
+                    questionElement: element,
+                    answerElement: null
                 };
                 
-                if (isUser) {
-                    userMessages.push(messageData);
-                    console.log(`ChatGPT: 👤 User message ${userMessages.length}: "${text.substring(0, 50)}..."`);
-                } else {
-                    assistantMessages.push(messageData);
-                    console.log(`ChatGPT: 🤖 Assistant message ${assistantMessages.length}: "${text.substring(0, 50)}..."`);
-                }
+            } else if (role === 'assistant' && currentPair.question) {
+                // Add assistant response to current pair
+                currentPair.answer = text;
+                currentPair.answerElement = element;
             }
-        }
+        });
         
-        console.log(`ChatGPT: Found ${userMessages.length} user messages and ${assistantMessages.length} assistant messages`);
-        
-        // Second pass: intelligently pair them
-        if (userMessages.length > 0 && assistantMessages.length > 0) {
-            // Method 1: Sequential pairing (most common)
-            const minCount = Math.min(userMessages.length, assistantMessages.length);
-            
-            for (let i = 0; i < minCount; i++) {
-                const userMsg = userMessages[i];
-                let assistantMsg = null;
-                
-                // Find the next assistant message after this user message
-                for (let j = 0; j < assistantMessages.length; j++) {
-                    if (assistantMessages[j].index > userMsg.index) {
-                        assistantMsg = assistantMessages[j];
-                        assistantMessages.splice(j, 1); // Remove to avoid reuse
-                        break;
-                    }
-                }
-                
-                // Fallback: use the next available assistant message
-                if (!assistantMsg && assistantMessages.length > 0) {
-                    assistantMsg = assistantMessages.shift();
-                }
-                
-                if (assistantMsg) {
-                    allConversations.push({
-                        id: allConversations.length + 1,
-                        question: userMsg.text,
-                        answer: assistantMsg.text,
-                        timestamp: new Date().toISOString(),
-                        questionElement: userMsg.element,
-                        answerElement: assistantMsg.element
-                    });
-                    console.log(`ChatGPT: ✅ Paired conversation ${allConversations.length}: User(${userMsg.index}) + Assistant(${assistantMsg.index})`);
-                }
-            }
-            
-            conversations.push(...allConversations);
-        } else {
-            // Fallback: original sequential processing
-            let currentPair = { question: '', answer: '' };
-            
-            for (let i = 0; i < messages.length; i++) {
-                const message = messages[i];
-                const isUser = isUserMessage(message, 'chatgpt');
-                const text = extractTextFromElement(message);
-                
-                if (text.trim() && text.length > 3) {
-                    if (isUser) {
-                        if (currentPair.question && currentPair.answer) {
-                            conversations.push({
-                                id: conversations.length + 1,
-                                question: currentPair.question,
-                                answer: currentPair.answer,
-                                timestamp: new Date().toISOString(),
-                                questionElement: currentPair.questionElement,
-                                answerElement: currentPair.answerElement
-                            });
-                        }
-                        currentPair = { question: text, answer: '', questionElement: message };
-                    } else if (currentPair.question) {
-                        if (!currentPair.answer) {
-                            currentPair.answer = text;
-                            currentPair.answerElement = message;
-                        } else if (text.length > 20) {
-                            currentPair.answer += '\n\n' + text;
-                        }
-                    }
-                }
-            }
-            
-            // Add final pair
-            if (currentPair.question && currentPair.answer) {
+        // Add final pair
+        if (currentPair.question && currentPair.answer) {
+            if (!isDuplicateConversation(conversations, currentPair.question, currentPair.answer)) {
                 conversations.push({
                     id: conversations.length + 1,
                     question: currentPair.question,
@@ -228,77 +110,190 @@
             }
         }
         
-        console.log(`ChatGPT: Final result - ${conversations.length} conversations extracted`);
+        return conversations;
+    }
+    
+    // Extract using conversation turn elements
+    function extractFromConversationTurns(elements) {
+        const conversations = [];
+        let currentPair = { question: '', answer: '', questionElement: null, answerElement: null };
         
-        // If we got very few conversations, try alternative extraction method
-        if (conversations.length < 3 && messages.length > 6) {
-            console.log(`ChatGPT: Low extraction count (${conversations.length}), trying alternative method...`);
+        elements.forEach((element, index) => {
+            const text = extractTextFromElement(element);
             
-            // Alternative: group consecutive messages by role
-            const alternativeConversations = [];
-            let userMessages = [];
-            let aiMessages = [];
-            let lastRole = null;
+            // Skip empty or navigation content
+            if (!text || text.length < 5 || isNavigationContent(text)) return;
             
-            for (let i = 0; i < messages.length; i++) {
-                const message = messages[i];
-                const isUser = isUserMessage(message, 'chatgpt');
-                const text = extractTextFromElement(message);
-                
-                if (text.trim() && text.length > 3) {
-                    if (isUser) {
-                        // If we were collecting AI messages, pair them with previous user messages
-                        if (aiMessages.length > 0 && userMessages.length > 0) {
-                            const userText = userMessages.map(m => extractTextFromElement(m)).join(' ');
-                            const aiText = aiMessages.map(m => extractTextFromElement(m)).join('\n\n');
-                            
-                            alternativeConversations.push({
-                                id: alternativeConversations.length + 1,
-                                question: userText,
-                                answer: aiText,
-                                timestamp: new Date().toISOString(),
-                                questionElement: userMessages[0],
-                                answerElement: aiMessages[0]
-                            });
-                        }
-                        
-                        // Start new user message collection
-                        userMessages = [message];
-                        aiMessages = [];
-                        lastRole = 'user';
-                    } else {
-                        // Collect AI messages
-                        if (lastRole === 'user' || lastRole === 'ai') {
-                            aiMessages.push(message);
-                            lastRole = 'ai';
-                        }
+            // Determine if this is a user or assistant message by looking at child elements
+            const isUser = isUserMessage(element, 'chatgpt');
+            
+            console.log(`ChatGPT Turn ${index}: isUser=${isUser}, text="${text.substring(0, 60)}..."`);
+            
+            if (isUser) {
+                // Save previous pair
+                if (currentPair.question && currentPair.answer) {
+                    if (!isDuplicateConversation(conversations, currentPair.question, currentPair.answer)) {
+                        conversations.push({
+                            id: conversations.length + 1,
+                            question: currentPair.question,
+                            answer: currentPair.answer,
+                            timestamp: new Date().toISOString(),
+                            questionElement: currentPair.questionElement,
+                            answerElement: currentPair.answerElement
+                        });
                     }
                 }
-            }
-            
-            // Handle final pair
-            if (userMessages.length > 0 && aiMessages.length > 0) {
-                const userText = userMessages.map(m => extractTextFromElement(m)).join(' ');
-                const aiText = aiMessages.map(m => extractTextFromElement(m)).join('\n\n');
                 
-                alternativeConversations.push({
-                    id: alternativeConversations.length + 1,
-                    question: userText,
-                    answer: aiText,
+                currentPair = {
+                    question: text,
+                    answer: '',
+                    questionElement: element,
+                    answerElement: null
+                };
+            } else if (currentPair.question) {
+                currentPair.answer = text;
+                currentPair.answerElement = element;
+            }
+        });
+        
+        // Add final pair
+        if (currentPair.question && currentPair.answer) {
+            if (!isDuplicateConversation(conversations, currentPair.question, currentPair.answer)) {
+                conversations.push({
+                    id: conversations.length + 1,
+                    question: currentPair.question,
+                    answer: currentPair.answer,
                     timestamp: new Date().toISOString(),
-                    questionElement: userMessages[0],
-                    answerElement: aiMessages[0]
+                    questionElement: currentPair.questionElement,
+                    answerElement: currentPair.answerElement
                 });
             }
+        }
+        
+        return conversations;
+    }
+    
+    // Check if content looks like navigation/menu items
+    function isNavigationContent(text) {
+        const navigationPatterns = [
+            /^(Chat history|New chat|Search chats|Library|Sora|GPT|Life Coach|No psycho)/i,
+            /^[\d\/\-\.]+$/, // Date patterns like "9/6/2025" or "2024-01-01"
+            /^[⇧⌘⌃⌥]+[A-Z\d]$/i, // Keyboard shortcuts like "⇧⌘O"
+            /^[×☕🔍📋➕✕]+$/u, // Special characters/icons only
+            /^(Chat\s+history|New\s+chat|Search\s+chats|Copy\s+link|Share|Delete|Rename)/i,
+            /^[A-Z]{2,}\s*[×✕]?\s*$/i, // Short uppercase words with optional close button
+            /^(Today|Yesterday|Previous \d+ Days|Last \d+ days)/i, // Date headers
+            /^(Settings|Help|Logout|Sign out|Profile|Account)/i, // Settings/menu items
+            /^\s*[•·‣▸►]\s*/, // Bullet points or arrows (likely navigation)
+            /^(Upgrade|Subscribe|Pro|Plus)/i // Subscription/upgrade prompts
+        ];
+        
+        return navigationPatterns.some(pattern => pattern.test(text.trim()));
+    }
+    
+    // Check for duplicate conversations
+    function isDuplicateConversation(conversations, question, answer) {
+        return conversations.some(conv => 
+            conv.question.trim().substring(0, 100) === question.trim().substring(0, 100) && 
+            conv.answer.trim().substring(0, 100) === answer.trim().substring(0, 100)
+        );
+    }
+    
+    // Fallback extraction method  
+    function extractChatGPTFallback() {
+        console.log('ChatGPT: Using fallback extraction method...');
+        const conversations = [];
+        
+        // Enhanced selectors for fallback - focus on main content area
+        const messageSelectors = [
+            'main .group.w-full.text-token-text-primary',
+            'main .group.w-full.text-gray-800', 
+            'main .group.w-full',
+            'main div.group',
+            'main [class*="message"]',
+            'main article',
+            'main [role="article"]'
+        ];
+        
+        let messages = [];
+        let workingSelector = null;
+        
+        // Try each selector to find the best one for fallback
+        for (const selector of messageSelectors) {
+            const found = document.querySelectorAll(selector);
+            console.log(`ChatGPT Fallback: "${selector}": ${found.length} elements`);
             
-            console.log(`ChatGPT: Alternative method found ${alternativeConversations.length} conversations`);
-            
-            // Use alternative if it found more conversations
-            if (alternativeConversations.length > conversations.length) {
-                console.log('ChatGPT: Using alternative extraction results');
-                return alternativeConversations;
+            if (found.length > 0) {
+                const filtered = Array.from(found).filter(el => {
+                    const text = extractTextFromElement(el);
+                    return text.length > 10 && text.length < 50000 && !isNavigationContent(text) && 
+                           !el.closest('nav') && !el.closest('[class*="sidebar"]');
+                });
+                
+                if (filtered.length > messages.length) {
+                    messages = filtered;
+                    workingSelector = selector;
+                }
             }
         }
+        
+        if (messages.length === 0) {
+            console.log('ChatGPT Fallback: No suitable messages found');
+            return conversations;
+        }
+
+        console.log(`ChatGPT Fallback: Using ${workingSelector} with ${messages.length} messages`);
+        
+        // Simple sequential pairing for fallback
+        let currentPair = { question: '', answer: '', questionElement: null, answerElement: null };
+        
+        messages.forEach((message, index) => {
+            const text = extractTextFromElement(message);
+            if (!text || text.length < 10 || isNavigationContent(text)) return;
+            
+            const isUser = isUserMessage(message, 'chatgpt');
+            console.log(`ChatGPT Fallback ${index}: isUser=${isUser}, text="${text.substring(0, 50)}..."`);
+            
+            if (isUser) {
+                // Save previous pair
+                if (currentPair.question && currentPair.answer && 
+                    !isDuplicateConversation(conversations, currentPair.question, currentPair.answer)) {
+                    conversations.push({
+                        id: conversations.length + 1,
+                        question: currentPair.question,
+                        answer: currentPair.answer,
+                        timestamp: new Date().toISOString(),
+                        questionElement: currentPair.questionElement,
+                        answerElement: currentPair.answerElement
+                    });
+                }
+                
+                currentPair = {
+                    question: text,
+                    answer: '',
+                    questionElement: message,
+                    answerElement: null
+                };
+            } else if (currentPair.question) {
+                currentPair.answer = text;
+                currentPair.answerElement = message;
+            }
+        });
+        
+        // Add final pair
+        if (currentPair.question && currentPair.answer && 
+            !isDuplicateConversation(conversations, currentPair.question, currentPair.answer)) {
+            conversations.push({
+                id: conversations.length + 1,
+                question: currentPair.question,
+                answer: currentPair.answer,
+                timestamp: new Date().toISOString(),
+                questionElement: currentPair.questionElement,
+                answerElement: currentPair.answerElement
+            });
+        }
+        
+        console.log(`ChatGPT Fallback: Extracted ${conversations.length} conversations`);
         
         return conversations;
     }
@@ -1095,6 +1090,230 @@
         return conversations;
     }
     
+    // Inject export buttons next to tables in the AI chat interface
+    function injectTableExportButtons() {
+        console.log('🔍 Looking for tables to add export buttons...');
+        
+        // Find all tables on the page
+        const tables = document.querySelectorAll('table');
+        
+        tables.forEach((table, index) => {
+            // Skip if export button already exists
+            if (table.parentElement?.querySelector('.ai-table-export-btn')) {
+                return;
+            }
+            
+            // Only process tables with actual data (more than just headers)
+            const rows = table.querySelectorAll('tr');
+            if (rows.length < 2) return;
+            
+            // Create export button
+            const exportBtn = document.createElement('button');
+            exportBtn.className = 'ai-table-export-btn';
+            exportBtn.innerHTML = `
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14,2 14,8 20,8"></polyline>
+                    <line x1="16" y1="13" x2="8" y2="13"></line>
+                    <line x1="16" y1="17" x2="8" y2="17"></line>
+                    <polyline points="10,9 9,9 8,9"></polyline>
+                </svg>
+                Export to Sheets
+            `;
+            
+            // Style the button
+            exportBtn.style.cssText = `
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                margin: 8px 0;
+                padding: 6px 12px;
+                background-color: #10b981;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                font-size: 12px;
+                font-weight: 500;
+                cursor: pointer;
+                transition: all 0.2s ease;
+                opacity: 0.8;
+                position: relative;
+                z-index: 1000;
+            `;
+            
+            // Add hover effect
+            exportBtn.addEventListener('mouseenter', () => {
+                exportBtn.style.backgroundColor = '#059669';
+                exportBtn.style.opacity = '1';
+                exportBtn.style.transform = 'translateY(-1px)';
+            });
+            
+            exportBtn.addEventListener('mouseleave', () => {
+                exportBtn.style.backgroundColor = '#10b981';
+                exportBtn.style.opacity = '0.8';
+                exportBtn.style.transform = 'translateY(0)';
+            });
+            
+            // Add click handler
+            exportBtn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                
+                try {
+                    // Extract table data
+                    const tableData = extractTableData(table);
+                    if (!tableData) {
+                        alert('Could not extract table data');
+                        return;
+                    }
+                    
+                    // Show loading state
+                    const originalText = exportBtn.innerHTML;
+                    exportBtn.innerHTML = `
+                        <div style="width: 16px; height: 16px; border: 2px solid #fff; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+                        Exporting...
+                    `;
+                    exportBtn.style.pointerEvents = 'none';
+                    
+                    // Add spin animation if not exists
+                    if (!document.querySelector('#spin-animation')) {
+                        const style = document.createElement('style');
+                        style.id = 'spin-animation';
+                        style.textContent = `
+                            @keyframes spin {
+                                0% { transform: rotate(0deg); }
+                                100% { transform: rotate(360deg); }
+                            }
+                        `;
+                        document.head.appendChild(style);
+                    }
+                    
+                    // Export as CSV (fallback since Google Sheets API needs OAuth)
+                    await exportTableAsCSV(tableData, `AI_Table_${Date.now()}`);
+                    
+                    // Show success state
+                    exportBtn.innerHTML = `
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="20,6 9,17 4,12"></polyline>
+                        </svg>
+                        Exported!
+                    `;
+                    exportBtn.style.backgroundColor = '#059669';
+                    
+                    // Reset after 2 seconds
+                    setTimeout(() => {
+                        exportBtn.innerHTML = originalText;
+                        exportBtn.style.backgroundColor = '#10b981';
+                        exportBtn.style.pointerEvents = 'auto';
+                    }, 2000);
+                    
+                } catch (error) {
+                    console.error('Export failed:', error);
+                    
+                    // Show error state
+                    exportBtn.innerHTML = `
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="15" y1="9" x2="9" y2="15"></line>
+                            <line x1="9" y1="9" x2="15" y2="15"></line>
+                        </svg>
+                        Failed
+                    `;
+                    exportBtn.style.backgroundColor = '#dc2626';
+                    
+                    // Reset after 2 seconds
+                    setTimeout(() => {
+                        exportBtn.innerHTML = originalText;
+                        exportBtn.style.backgroundColor = '#10b981';
+                        exportBtn.style.pointerEvents = 'auto';
+                    }, 2000);
+                }
+            });
+            
+            // Insert button after the table
+            if (table.parentElement) {
+                table.parentElement.insertBefore(exportBtn, table.nextSibling);
+                console.log(`✅ Added export button for table ${index + 1}`);
+            }
+        });
+    }
+    
+    // Extract table data from DOM table element
+    function extractTableData(table) {
+        const rows = Array.from(table.querySelectorAll('tr'));
+        return rows.map(row => 
+            Array.from(row.querySelectorAll('td, th')).map(cell => 
+                cell.textContent.trim()
+            )
+        ).filter(row => row.length > 0);
+    }
+    
+    // Export table data as CSV file
+    async function exportTableAsCSV(tableData, filename) {
+        const csvContent = tableData.map(row => 
+            row.map(cell => {
+                // Escape quotes and wrap in quotes if contains comma
+                const escaped = String(cell).replace(/"/g, '""');
+                return escaped.includes(',') ? `"${escaped}"` : escaped;
+            }).join(',')
+        ).join('\n');
+        
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = window.URL.createObjectURL(blob);
+        
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${filename}_${new Date().toISOString().split('T')[0]}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+        
+        // Show success notification
+        showExportNotification('Table exported successfully!', 'success');
+    }
+    
+    // Show export notification
+    function showExportNotification(message, type = 'success') {
+        const notification = document.createElement('div');
+        notification.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 12px 16px;
+            background-color: ${type === 'success' ? '#10b981' : '#dc2626'};
+            color: white;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            z-index: 10000;
+            opacity: 0;
+            transform: translateX(20px);
+            transition: all 0.3s ease;
+        `;
+        notification.textContent = message;
+        
+        document.body.appendChild(notification);
+        
+        // Trigger animation
+        setTimeout(() => {
+            notification.style.opacity = '1';
+            notification.style.transform = 'translateX(0)';
+        }, 10);
+        
+        // Remove after 3 seconds
+        setTimeout(() => {
+            notification.style.opacity = '0';
+            notification.style.transform = 'translateX(20px)';
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.parentNode.removeChild(notification);
+                }
+            }, 300);
+        }, 3000);
+    }
+
     // Update conversations and send to iframe with retry mechanism
     function updateConversations(retryCount = 0) {
         const maxRetries = 3;
@@ -1552,21 +1771,28 @@
         // Monitor for changes with enhanced detection for all platforms
         const observer = new MutationObserver((mutations) => {
             let shouldUpdate = false;
+            let shouldCheckTables = false;
             let changeDescription = '';
             
             for (const mutation of mutations) {
                 if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
-                    // Check if any added nodes might be new messages
+                    // Check if any added nodes might be new messages or tables
                     for (const node of mutation.addedNodes) {
                         if (node.nodeType === Node.ELEMENT_NODE) {
+                            // Check for tables
+                            if (node.matches && node.matches('table') || 
+                                node.querySelector && node.querySelector('table')) {
+                                shouldCheckTables = true;
+                            }
+                            
                             // Comprehensive message pattern detection for all platforms
                             const hasMessagePattern = (
                                 node.matches && (
                                     // ChatGPT patterns
                                     node.matches('[data-message-author-role]') ||
                                     node.matches('[data-testid*="conversation-turn"]') ||
-                                    node.matches('.group.w-full') ||
-                                    node.matches('.group') ||
+                                    node.matches('main .group.w-full') ||
+                                    node.matches('main .group') ||
                                     // Claude patterns
                                     node.matches('[data-testid*="message"]') ||
                                     node.matches('div[class*="font-user"]') ||
@@ -1585,8 +1811,8 @@
                                     // ChatGPT patterns
                                     node.querySelector('[data-message-author-role]') ||
                                     node.querySelector('[data-testid*="conversation-turn"]') ||
-                                    node.querySelector('.group.w-full') ||
-                                    node.querySelector('.group') ||
+                                    node.querySelector('main .group.w-full') ||
+                                    node.querySelector('main .group') ||
                                     // Claude patterns
                                     node.querySelector('[data-testid*="message"]') ||
                                     node.querySelector('div[class*="font-user"]') ||
@@ -1605,6 +1831,8 @@
                             if (hasMessagePattern) {
                                 shouldUpdate = true;
                                 changeDescription = `New message detected: ${node.tagName} with class "${node.className?.substring(0, 50)}"`;
+                                // Also check for tables in new messages
+                                shouldCheckTables = true;
                                 break;
                             }
                         }
@@ -1613,12 +1841,23 @@
                 }
             }
             
+            // Handle table monitoring
+            if (shouldCheckTables) {
+                clearTimeout(window.tableCheckTimer);
+                window.tableCheckTimer = setTimeout(() => {
+                    console.log('📊 Checking for new tables...');
+                    injectTableExportButtons();
+                }, 1000);
+            }
+            
             if (shouldUpdate) {
                 // Debounce updates to avoid excessive calls
                 clearTimeout(window.conversationUpdateTimer);
                 window.conversationUpdateTimer = setTimeout(() => {
                     console.log('🔄 Detected conversation changes:', changeDescription);
                     updateConversations();
+                    // Also check for tables after conversation updates
+                    setTimeout(() => injectTableExportButtons(), 500);
                 }, 1500); // Slightly longer delay to ensure content is fully rendered
             }
         });
@@ -1633,6 +1872,9 @@
         setInterval(() => {
             const currentCount = currentConversations.length;
             updateConversations();
+            
+            // Also periodically check for tables
+            injectTableExportButtons();
             
             // Log only if count changed
             setTimeout(() => {
@@ -1654,6 +1896,11 @@
             // Start monitoring after UI is ready
             setTimeout(() => {
                 startMonitoring();
+                // Initial table detection
+                setTimeout(() => {
+                    console.log('🔄 Running initial table detection...');
+                    injectTableExportButtons();
+                }, 2000);
             }, 500);
         }, 1000);
         
@@ -1760,6 +2007,69 @@
         });
         
         return { all: textElements, user: userLike, ai: aiLike };
+    };
+
+    // ChatGPT-specific debugging function
+    window.debugChatGPTExtraction = function() {
+        console.log('🔍 ChatGPT Extraction Debug:');
+        console.log('Current URL:', window.location.href);
+        
+        // Check for data-message-author-role elements
+        const roleElements = document.querySelectorAll('[data-message-author-role]');
+        console.log(`Found ${roleElements.length} elements with data-message-author-role:`);
+        Array.from(roleElements).slice(0, 5).forEach((el, i) => {
+            const role = el.getAttribute('data-message-author-role');
+            const text = el.textContent?.trim().substring(0, 100) || '';
+            console.log(`  ${i}: role=${role}, text="${text}..."`);
+        });
+        
+        // Check for conversation turn elements
+        const turnElements = document.querySelectorAll('[data-testid*="conversation-turn"]');
+        console.log(`Found ${turnElements.length} conversation turn elements:`);
+        Array.from(turnElements).slice(0, 3).forEach((el, i) => {
+            const text = el.textContent?.trim().substring(0, 100) || '';
+            console.log(`  ${i}: text="${text}..."`);
+        });
+        
+        // Check navigation content detection
+        const allText = Array.from(document.querySelectorAll('*')).map(el => {
+            const text = el.textContent?.trim() || '';
+            if (text.length > 5 && text.length < 200) {
+                return { element: el, text, isNav: isNavigationContent(text) };
+            }
+        }).filter(Boolean);
+        
+        const navItems = allText.filter(item => item.isNav);
+        console.log(`Navigation items detected: ${navItems.length}`);
+        navItems.slice(0, 10).forEach((item, i) => {
+            console.log(`  ${i}: "${item.text.substring(0, 50)}..."`);
+        });
+        
+        // Test extraction methods
+        console.log('Testing extraction methods:');
+        
+        // Method 1: data-message-author-role
+        if (roleElements.length > 0) {
+            const result1 = extractFromDataMessageRole(Array.from(roleElements));
+            console.log(`Method 1 (data-message-author-role): ${result1.length} conversations`);
+        }
+        
+        // Method 2: conversation turns
+        if (turnElements.length > 0) {
+            const result2 = extractFromConversationTurns(Array.from(turnElements));
+            console.log(`Method 2 (conversation turns): ${result2.length} conversations`);
+        }
+        
+        // Method 3: fallback
+        const result3 = extractChatGPTFallback();
+        console.log(`Method 3 (fallback): ${result3.length} conversations`);
+        
+        return {
+            roleElements: roleElements.length,
+            turnElements: turnElements.length,
+            navigationItems: navItems.length,
+            url: window.location.href
+        };
     };
 
     // Debug function for testing - available in console as window.debugAIChatNavigator()
