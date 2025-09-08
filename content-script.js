@@ -5,7 +5,35 @@
     console.log('AI Chat Navigator loaded on:', window.location.hostname);
     
     let currentConversations = [];
+    let manuallyAddedConversations = new Set(); // Track manually added conversation IDs
+    let persistentConversations = []; // Store manually added conversations
     let isInjected = false;
+    
+    // Storage functions for persistent conversations
+    function saveManuallyAddedConversations() {
+        try {
+            const key = `ai-chat-nav-manual-${window.location.pathname}`;
+            localStorage.setItem(key, JSON.stringify(persistentConversations));
+            console.log('💾 Saved manually added conversations:', persistentConversations.length);
+        } catch (error) {
+            console.warn('Could not save manually added conversations:', error);
+        }
+    }
+    
+    function loadManuallyAddedConversations() {
+        try {
+            const key = `ai-chat-nav-manual-${window.location.pathname}`;
+            const saved = localStorage.getItem(key);
+            if (saved) {
+                persistentConversations = JSON.parse(saved);
+                persistentConversations.forEach(conv => manuallyAddedConversations.add(conv.id));
+                console.log('📥 Loaded manually added conversations:', persistentConversations.length);
+            }
+        } catch (error) {
+            console.warn('Could not load manually added conversations:', error);
+            persistentConversations = [];
+        }
+    }
     
     // Robust conversation extraction for ChatGPT
     function extractChatGPT() {
@@ -1304,6 +1332,11 @@
     function extractTableFromText(text) {
         if (!text || text.trim().length === 0) return null;
         
+        // Skip obvious code patterns (function definitions, object definitions, etc.)
+        if (isLikelyCodeNotTable(text)) {
+            return null;
+        }
+        
         // HTML table in code block
         if (/<table[\s\S]*?<\/table>/i.test(text)) {
             const result = parseHTMLTableFromText(text);
@@ -1317,22 +1350,98 @@
         }
         
         // TSV format (check before CSV as tabs are more explicit separators)
-        if (text.includes('\t')) {
+        if (text.includes('\t') && looksLikeTabularData(text)) {
             const result = parseTSVFromText(text);
             if (result && result.length > 1 && result[0].length > 1) return result;
         }
         
         // CSV format (most common, check last to avoid false positives)
-        if (text.includes(',')) {
+        if (text.includes(',') && looksLikeCSVData(text)) {
             const result = parseCSVFromText(text);
             if (result && result.length > 1 && result[0].length > 1) return result;
         }
         
-        // Simple space-separated tables (as last resort)
-        const result = parseSpaceSeparatedTable(text);
-        if (result && result.length > 1 && result[0].length > 1) return result;
+        // Simple space-separated tables (only if it really looks like tabular data)
+        if (looksLikeSpaceSeparatedTable(text)) {
+            const result = parseSpaceSeparatedTable(text);
+            if (result && result.length > 1 && result[0].length > 1) return result;
+        }
         
         return null;
+    }
+    
+    // Check if text looks like code rather than a table
+    function isLikelyCodeNotTable(text) {
+        const codePatterns = [
+            /\b(function|def|class|object|struct|enum|interface)\s+\w+/i,
+            /\b(import|require|include|using)\s+/i,
+            /\b(if|else|for|while|switch|case|try|catch)\s*[(\{]/i,
+            /\b(var|let|const|int|string|bool|float|double)\s+\w+/i,
+            /\b(public|private|protected|static|final|abstract)\s+/i,
+            /\breturn\s+\w+/i,
+            /\w+\s*=\s*\w+\s*\+\s*\w+/i,  // assignments like "a = b + c"
+            /\w+\.\w+\(/i,  // method calls like "obj.method()"
+            /\w+\s*\{\s*$/m,  // opening braces at end of line
+            /^\s*\}\s*$/m,  // closing braces on their own line
+            /\/\/|\/\*|\*\/|#/,  // comments
+            /println|print|console\.log|System\.out/i,  // print statements
+        ];
+        
+        return codePatterns.some(pattern => pattern.test(text));
+    }
+    
+    // Check if text looks like actual CSV data (not just code with commas)
+    function looksLikeCSVData(text) {
+        const lines = text.split('\n').filter(line => line.trim());
+        if (lines.length < 2) return false;
+        
+        // Check if most lines have similar comma counts
+        const commaCounts = lines.map(line => (line.match(/,/g) || []).length);
+        const avgCommas = commaCounts.reduce((a, b) => a + b, 0) / commaCounts.length;
+        
+        // Reject if commas are inconsistent or too few
+        if (avgCommas < 1) return false;
+        
+        const consistentCommas = commaCounts.filter(count => Math.abs(count - avgCommas) <= 1).length;
+        return consistentCommas >= lines.length * 0.7; // 70% of lines should have similar comma counts
+    }
+    
+    // Check if text looks like tabular TSV data
+    function looksLikeTabularData(text) {
+        const lines = text.split('\n').filter(line => line.trim() && line.includes('\t'));
+        if (lines.length < 2) return false;
+        
+        const tabCounts = lines.map(line => (line.match(/\t/g) || []).length);
+        const avgTabs = tabCounts.reduce((a, b) => a + b, 0) / tabCounts.length;
+        
+        // Must have at least 1 tab on average and be consistent
+        return avgTabs >= 1 && tabCounts.filter(count => Math.abs(count - avgTabs) <= 1).length >= lines.length * 0.7;
+    }
+    
+    // Check if text looks like a space-separated table (very strict)
+    function looksLikeSpaceSeparatedTable(text) {
+        const lines = text.split('\n').filter(line => line.trim().length > 0);
+        if (lines.length < 3) return false; // Need at least 3 lines for a table
+        
+        // Check for consistent column-like structure
+        const potentialTableLines = lines.filter(line => {
+            // Must have multiple groups separated by 2+ spaces
+            const spaceGroups = line.match(/\s{2,}/g);
+            return spaceGroups && spaceGroups.length >= 2; // At least 2 separators (3 columns)
+        });
+        
+        // At least 80% of lines should look like table rows
+        if (potentialTableLines.length < lines.length * 0.8) return false;
+        
+        // Check for consistent number of columns
+        const columnCounts = potentialTableLines.map(line => 
+            line.split(/\s{2,}/).filter(col => col.trim().length > 0).length
+        );
+        
+        const avgCols = columnCounts.reduce((a, b) => a + b, 0) / columnCounts.length;
+        const consistentCols = columnCounts.filter(count => Math.abs(count - avgCols) <= 1).length;
+        
+        return avgCols >= 3 && consistentCols >= columnCounts.length * 0.8;
     }
     
     // Parse HTML table from text content
@@ -1476,34 +1585,39 @@
         const exportBtn = document.createElement('button');
         exportBtn.className = 'ai-table-export-btn';
         exportBtn.innerHTML = `
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
                 <polyline points="14,2 14,8 20,8"></polyline>
                 <line x1="16" y1="13" x2="8" y2="13"></line>
                 <line x1="16" y1="17" x2="8" y2="17"></line>
                 <polyline points="10,9 9,9 8,9"></polyline>
             </svg>
-            Export to Sheets
+            <span>Sheets</span>
         `;
+        
+        exportBtn.title = 'Export table to Google Sheets';
             
-        // Style the button
+        // Style the button - more compact to not interfere with copy buttons
         exportBtn.style.cssText = `
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            margin: 8px 0;
-            padding: 6px 12px;
+            gap: 4px;
+            margin: 4px 6px 4px 0;
+            padding: 4px 8px;
             background-color: #10b981;
             color: white;
             border: none;
-            border-radius: 6px;
-            font-size: 12px;
+            border-radius: 4px;
+            font-size: 11px;
             font-weight: 500;
             cursor: pointer;
             transition: all 0.2s ease;
-            opacity: 0.8;
+            opacity: 0.85;
             position: relative;
             z-index: 1000;
+            white-space: nowrap;
+            max-width: 70px;
+            height: 24px;
         `;
         
         // Add hover effect
@@ -1675,11 +1789,36 @@
     // Update conversations and send to iframe with retry mechanism
     function updateConversations(retryCount = 0) {
         const maxRetries = 3;
-        const conversations = extractConversations();
-        currentConversations = conversations;
+        const extractedConversations = extractConversations();
+        
+        // Combine extracted conversations with persistent manually added ones
+        // const allConversations = [...extractedConversations, ...persistentConversations]; // Not used directly
+        
+        // Remove duplicates (prefer manually added versions)
+        const uniqueConversations = [];
+        const seenIds = new Set();
+        
+        // First add manually added conversations (higher priority)
+        persistentConversations.forEach(conv => {
+            if (!seenIds.has(conv.id)) {
+                uniqueConversations.push(conv);
+                seenIds.add(conv.id);
+            }
+        });
+        
+        // Then add extracted conversations that haven't been manually added
+        extractedConversations.forEach(conv => {
+            const id = conv.id || `extracted_${conv.question.substring(0, 50)}`;
+            if (!seenIds.has(id) && !manuallyAddedConversations.has(id)) {
+                uniqueConversations.push({...conv, id});
+                seenIds.add(id);
+            }
+        });
+        
+        currentConversations = uniqueConversations;
         
         const iframe = document.querySelector('#ai-chat-navigator-extension iframe');
-        console.log(`📤 Attempt ${retryCount + 1}: Sending ${conversations.length} conversations to iframe. Iframe found:`, !!iframe);
+        console.log(`📤 Attempt ${retryCount + 1}: Sending ${currentConversations.length} conversations to iframe. Iframe found:`, !!iframe);
         
         if (!iframe) {
             console.log('❌ No iframe found');
@@ -1699,8 +1838,8 @@
             // Ultra-safe data cleaning with multiple fallback strategies
             const cleanConversations = [];
             
-            for (let i = 0; i < conversations.length; i++) {
-                const conv = conversations[i];
+            for (let i = 0; i < currentConversations.length; i++) {
+                const conv = currentConversations[i];
                 
                 try {
                     // Extract only primitive values, no objects or DOM elements
@@ -1779,7 +1918,7 @@
             iframe.contentWindow.postMessage(messageData, '*');
             
             console.log('✅ Message sent successfully:', {
-                conversations: conversations.length,
+                conversations: cleanConversations.length,
                 timestamp: new Date().toLocaleTimeString()
             });
             
@@ -1813,7 +1952,48 @@
     function scrollToConversation(conversationId) {
         console.log('🎯 Attempting to scroll to conversation:', conversationId);
         const conversations = currentConversations;
-        const conversation = conversations.find(c => c.id === conversationId);
+        let conversation = conversations.find(c => c.id === conversationId);
+        
+        // If not found by ID, try to find by content for manually added conversations
+        if (!conversation) {
+            console.log('🔍 ID not found, searching by content for manually added conversation...');
+            const persistentConv = persistentConversations.find(c => c.id === conversationId);
+            if (persistentConv) {
+                // Try to find a matching conversation by question content
+                conversation = conversations.find(c => 
+                    c.questionElement && 
+                    c.question && 
+                    c.question.includes(persistentConv.question.substring(0, 50))
+                );
+                if (conversation) {
+                    console.log('✅ Found matching conversation by content');
+                }
+            }
+        }
+        
+        // If still not found, try to find any conversation element on the page that matches
+        if (!conversation) {
+            console.log('🔍 Still not found, trying DOM-based search...');
+            const persistentConv = persistentConversations.find(c => c.id === conversationId);
+            if (persistentConv) {
+                // Search for elements containing the question text
+                const questionText = persistentConv.question.substring(0, 100);
+                const elements = document.querySelectorAll('[data-message-author-role="user"], .user-message, .human');
+                
+                for (const element of elements) {
+                    if (element.textContent && element.textContent.includes(questionText.substring(0, 50))) {
+                        conversation = {
+                            id: conversationId,
+                            question: persistentConv.question,
+                            answer: persistentConv.answer,
+                            questionElement: element
+                        };
+                        console.log('✅ Found conversation element by DOM search');
+                        break;
+                    }
+                }
+            }
+        }
         
         if (conversation && conversation.questionElement) {
             console.log('📍 Found conversation element, starting smooth transition...');
@@ -1979,7 +2159,7 @@
         toggleButton.innerHTML = '📋';
         toggleButton.style.cssText = `
             position: fixed;
-            top: 20px;
+            bottom: 20px;
             right: 20px;
             width: 50px;
             height: 50px;
@@ -2143,8 +2323,12 @@
             if (conv.questionElement && !conv.questionElement.querySelector('.quick-add-btn')) {
                 const addBtn = document.createElement('button');
                 addBtn.className = 'quick-add-btn';
-                addBtn.innerHTML = '➕';
-                addBtn.title = 'Add to drawer';
+                
+                const conversationId = conv.id || `conv_${index}`;
+                const isAlreadyAdded = manuallyAddedConversations.has(conversationId);
+                
+                addBtn.innerHTML = isAlreadyAdded ? '✓' : '➕';
+                addBtn.title = isAlreadyAdded ? 'Already in drawer (permanent)' : 'Add to drawer';
                 
                 addBtn.style.cssText = `
                     position: absolute;
@@ -2152,16 +2336,18 @@
                     right: 8px;
                     width: 24px;
                     height: 24px;
-                    background: #4f46e5;
+                    background: ${isAlreadyAdded ? '#059669' : '#4f46e5'};
                     color: white;
                     border: none;
                     border-radius: 50%;
                     font-size: 12px;
                     cursor: pointer;
-                    opacity: 0.7;
+                    opacity: ${isAlreadyAdded ? '1' : '0.7'};
                     transition: all 0.2s ease;
                     z-index: 1001;
-                    display: none;
+                    display: ${isAlreadyAdded ? 'flex' : 'none'};
+                    align-items: center;
+                    justify-content: center;
                 `;
                 
                 // Show button on hover
@@ -2193,27 +2379,52 @@
                     e.preventDefault();
                     e.stopPropagation();
                     
+                    const conversationId = conv.id || `quick_${Date.now()}`;
+                    
+                    // Check if already added to avoid duplicates
+                    if (manuallyAddedConversations.has(conversationId)) {
+                        addBtn.innerHTML = '✓';
+                        addBtn.style.backgroundColor = '#10b981';
+                        setTimeout(() => {
+                            addBtn.innerHTML = '➕';
+                            addBtn.style.backgroundColor = '#4f46e5';
+                        }, 1000);
+                        return;
+                    }
+                    
+                    const conversationData = {
+                        id: conversationId,
+                        question: conv.question,
+                        answer: conv.answer,
+                        timestamp: conv.timestamp || new Date().toISOString(),
+                        isManuallyAdded: true
+                    };
+                    
+                    // Add to persistent storage
+                    persistentConversations.push(conversationData);
+                    manuallyAddedConversations.add(conversationId);
+                    saveManuallyAddedConversations();
+                    
                     // Send to iframe to add to drawer
                     const iframe = document.querySelector('#ai-chat-navigator-extension iframe');
                     if (iframe && iframe.contentWindow) {
                         iframe.contentWindow.postMessage({
                             type: 'ADD_CONVERSATION_TO_DRAWER',
-                            conversation: {
-                                id: conv.id || `quick_${Date.now()}`,
-                                question: conv.question,
-                                answer: conv.answer,
-                                timestamp: conv.timestamp || new Date().toISOString()
-                            }
+                            conversation: conversationData
                         }, '*');
                     }
                     
-                    // Visual feedback
+                    // Visual feedback showing it's permanently added
                     addBtn.innerHTML = '✓';
                     addBtn.style.backgroundColor = '#10b981';
+                    addBtn.title = 'Added to drawer (permanent)';
+                    
+                    // Show permanent success state
                     setTimeout(() => {
-                        addBtn.innerHTML = '➕';
-                        addBtn.style.backgroundColor = '#4f46e5';
-                    }, 1500);
+                        addBtn.innerHTML = '✓';
+                        addBtn.style.backgroundColor = '#059669';
+                        addBtn.style.opacity = '1';
+                    }, 300);
                 });
                 
                 container.appendChild(addBtn);
@@ -2224,6 +2435,9 @@
 
     // Start monitoring for conversation changes with enhanced pre-loading
     function startMonitoring() {
+        // Load any previously saved manually added conversations
+        loadManuallyAddedConversations();
+        
         // Pre-load existing conversations first
         preloadExistingConversations();
         

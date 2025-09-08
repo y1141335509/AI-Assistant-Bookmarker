@@ -8,9 +8,10 @@
         body { font-family: Arial, sans-serif; margin: 20px; line-height: 1.6; }
         .ai-response { border: 1px solid #ddd; padding: 15px; margin: 15px 0; background: #f9f9f9; }
         .ai-table-export-btn { 
-            background: #10b981; color: white; padding: 5px 10px; 
-            border: none; border-radius: 4px; margin: 5px 0; cursor: pointer; 
-            font-size: 12px; display: inline-flex; align-items: center; gap: 4px;
+            background: #10b981; color: white; padding: 4px 8px; 
+            border: none; border-radius: 4px; margin: 4px 6px 4px 0; cursor: pointer; 
+            font-size: 11px; display: inline-flex; align-items: center; gap: 4px;
+            height: 24px; max-width: 70px; white-space: nowrap;
         }
         .ai-table-export-btn:hover { background: #059669; }
         table { border-collapse: collapse; width: 100%; margin: 10px 0; }
@@ -126,10 +127,12 @@ Brazil	Brasília	215000000	8514877</code></pre>
                     <h4>🔧 Extension Simulation</h4>
                     <p>The actual extension would:</p>
                     <ul>
-                        <li>✅ Add "Export to Sheets" buttons to AI-generated tables (like the ones above)</li>
+                        <li>✅ Add compact "Sheets" buttons to AI-generated tables (like the ones above)</li>
                         <li>❌ Skip UI tables like the navigation menu</li>
-                        <li>📊 Parse various formats: HTML, Markdown, CSV, TSV</li>
+                        <li>📊 Parse various formats: HTML, Markdown, CSV, TSV, space-separated</li>
                         <li>🎯 Only target content within AI response containers</li>
+                        <li>💾 Persist manually added conversations between sessions</li>
+                        <li>➕ Show permanent "✓" for already-added conversations</li>
                     </ul>
                 `;
                 document.body.appendChild(note);
