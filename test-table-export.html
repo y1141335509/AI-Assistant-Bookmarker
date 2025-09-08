@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Table Export Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; line-height: 1.6; }
+        .ai-response { border: 1px solid #ddd; padding: 15px; margin: 15px 0; background: #f9f9f9; }
+        .ai-table-export-btn { 
+            background: #10b981; color: white; padding: 5px 10px; 
+            border: none; border-radius: 4px; margin: 5px 0; cursor: pointer; 
+            font-size: 12px; display: inline-flex; align-items: center; gap: 4px;
+        }
+        .ai-table-export-btn:hover { background: #059669; }
+        table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        pre { background: #f5f5f5; padding: 10px; overflow-x: auto; }
+        code { background: #f5f5f5; padding: 2px 4px; }
+    </style>
+</head>
+<body>
+    <h1>AI Chat Navigator - Table Export Test</h1>
+    <p>This page simulates AI responses with various table formats to test the export functionality.</p>
+
+    <!-- Simulated ChatGPT response with HTML table -->
+    <div class="ai-response" data-message-author-role="assistant">
+        <h3>HTML Table Example</h3>
+        <p>Here's a comparison of programming languages:</p>
+        <table>
+            <thead>
+                <tr>
+                    <th>Language</th>
+                    <th>Year Created</th>
+                    <th>Paradigm</th>
+                    <th>Popularity Rank</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>JavaScript</td>
+                    <td>1995</td>
+                    <td>Multi-paradigm</td>
+                    <td>1</td>
+                </tr>
+                <tr>
+                    <td>Python</td>
+                    <td>1991</td>
+                    <td>Multi-paradigm</td>
+                    <td>2</td>
+                </tr>
+                <tr>
+                    <td>Java</td>
+                    <td>1995</td>
+                    <td>Object-oriented</td>
+                    <td>3</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Simulated ChatGPT response with Markdown table -->
+    <div class="ai-response" data-message-author-role="assistant">
+        <h3>Markdown Table Example</h3>
+        <p>Here's data about different frameworks:</p>
+        <pre><code>| Framework | Type | GitHub Stars | Release Year |
+|-----------|------|-------------|-------------|
+| React     | UI   | 210k        | 2013        |
+| Vue       | UI   | 200k        | 2014        |
+| Angular   | UI   | 89k         | 2010        |
+| Django    | Web  | 70k         | 2005        |</code></pre>
+    </div>
+
+    <!-- Simulated ChatGPT response with CSV data -->
+    <div class="ai-response" data-message-author-role="assistant">
+        <h3>CSV Data Example</h3>
+        <p>Here's some financial data in CSV format:</p>
+        <pre><code>Company,Revenue,Employees,Founded
+Apple,"365.8B",150000,1976
+Microsoft,"211.9B",181000,1975
+Google,"307.4B",156000,1998
+Amazon,"513.9B",1540000,1994</code></pre>
+    </div>
+
+    <!-- Simulated ChatGPT response with TSV data -->
+    <div class="ai-response" data-message-author-role="assistant">
+        <h3>TSV Data Example</h3>
+        <p>Here's data in tab-separated format:</p>
+        <pre><code>Country	Capital	Population	Area_km2
+USA	Washington DC	331000000	9833520
+China	Beijing	1412000000	9596961
+India	New Delhi	1380000000	3287263
+Brazil	Brasília	215000000	8514877</code></pre>
+    </div>
+
+    <!-- This should NOT get an export button (UI table) -->
+    <div style="border: 1px solid #ccc; padding: 10px; margin: 10px 0;">
+        <h3>Navigation Menu (Should NOT get export button)</h3>
+        <table class="nav-table">
+            <tr>
+                <td><a href="#home">Home</a></td>
+                <td><a href="#about">About</a></td>
+                <td><a href="#contact">Contact</a></td>
+            </tr>
+        </table>
+    </div>
+
+    <script>
+        // Simulate the improved content script functionality
+        console.log('Simulating AI Chat Navigator table detection...');
+        
+        // Mock the functions we'd need from the content script
+        window.addEventListener('load', function() {
+            setTimeout(() => {
+                console.log('Running table detection simulation...');
+                
+                // Simulate finding tables and adding buttons
+                const tables = document.querySelectorAll('table');
+                console.log(`Found ${tables.length} tables`);
+                
+                // Add a note about what the real extension would do
+                const note = document.createElement('div');
+                note.style.cssText = 'background: #e6f3ff; padding: 15px; margin: 20px 0; border-left: 4px solid #0066cc;';
+                note.innerHTML = `
+                    <h4>🔧 Extension Simulation</h4>
+                    <p>The actual extension would:</p>
+                    <ul>
+                        <li>✅ Add "Export to Sheets" buttons to AI-generated tables (like the ones above)</li>
+                        <li>❌ Skip UI tables like the navigation menu</li>
+                        <li>📊 Parse various formats: HTML, Markdown, CSV, TSV</li>
+                        <li>🎯 Only target content within AI response containers</li>
+                    </ul>
+                `;
+                document.body.appendChild(note);
+            }, 100);
+        });
+    </script>
+</body>
+</html>

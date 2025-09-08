@@ -124,6 +124,188 @@ const ConversationStore = {
   }
 };
 
+// Handle messages from parent window (including quick-add)
+window.addEventListener('message', function(event) {
+  console.log('📨 Received message:', event.data);
+  
+  if (event.data.type === 'ADD_CONVERSATION_TO_DRAWER') {
+    const conversation = event.data.conversation;
+    ConversationStore.addConversation(conversation.question, conversation.answer);
+    console.log('➕ Added conversation to drawer via quick-add');
+  }
+});
+
+// Enhanced add modal with existing conversation suggestions
+function showEnhancedAddModal() {
+  const modalHtml = `
+    <div id="enhanced-add-modal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 10000; display: flex; align-items: center; justify-content: center;">
+      <div style="background: white; padding: 24px; border-radius: 12px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto;">
+        <h3 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600;">Add to Conversation Drawer</h3>
+        
+        <div style="margin-bottom: 16px;">
+          <label style="display: block; margin-bottom: 8px; font-weight: 500; color: #374151;">Choose an option:</label>
+          <div style="display: flex; gap: 12px; margin-bottom: 16px;">
+            <button id="option-manual" class="option-btn active" style="padding: 8px 16px; border: 2px solid #4f46e5; background: #4f46e5; color: white; border-radius: 6px; cursor: pointer; font-weight: 500;">Manual Entry</button>
+            <button id="option-existing" class="option-btn" style="padding: 8px 16px; border: 2px solid #e5e7eb; background: white; color: #374151; border-radius: 6px; cursor: pointer; font-weight: 500;">From Page</button>
+          </div>
+        </div>
+        
+        <div id="manual-form">
+          <div style="margin-bottom: 16px;">
+            <label style="display: block; margin-bottom: 8px; font-weight: 500; color: #374151;">Question:</label>
+            <textarea id="question-input" placeholder="Enter your question..." style="width: 100%; height: 80px; padding: 12px; border: 1px solid #d1d5db; border-radius: 6px; resize: vertical; font-family: inherit;"></textarea>
+          </div>
+          
+          <div style="margin-bottom: 16px;">
+            <label style="display: block; margin-bottom: 8px; font-weight: 500; color: #374151;">Answer:</label>
+            <textarea id="answer-input" placeholder="Enter the answer..." style="width: 100%; height: 120px; padding: 12px; border: 1px solid #d1d5db; border-radius: 6px; resize: vertical; font-family: inherit;"></textarea>
+          </div>
+        </div>
+        
+        <div id="existing-form" style="display: none;">
+          <div id="available-conversations" style="max-height: 300px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 6px; padding: 8px;">
+            <div style="padding: 20px; text-align: center; color: #6b7280;">
+              <div style="font-size: 24px; margin-bottom: 8px;">🔍</div>
+              <p>Detecting conversations on the page...</p>
+              <p style="font-size: 14px; margin-top: 4px;">This may take a moment.</p>
+            </div>
+          </div>
+        </div>
+        
+        <div style="display: flex; gap: 12px; justify-content: flex-end; margin-top: 20px;">
+          <button id="cancel-add" style="padding: 10px 20px; border: 1px solid #d1d5db; background: white; color: #374151; border-radius: 6px; cursor: pointer; font-weight: 500;">Cancel</button>
+          <button id="confirm-add" style="padding: 10px 20px; border: none; background: #4f46e5; color: white; border-radius: 6px; cursor: pointer; font-weight: 500;">Add to Drawer</button>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  document.body.insertAdjacentHTML('beforeend', modalHtml);
+  
+  // Handle option switching
+  const optionBtns = document.querySelectorAll('.option-btn');
+  const manualForm = document.getElementById('manual-form');
+  const existingForm = document.getElementById('existing-form');
+  let selectedConversation = null;
+  
+  optionBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      optionBtns.forEach(b => {
+        b.style.background = 'white';
+        b.style.color = '#374151';
+        b.style.borderColor = '#e5e7eb';
+        b.classList.remove('active');
+      });
+      btn.style.background = '#4f46e5';
+      btn.style.color = 'white';
+      btn.style.borderColor = '#4f46e5';
+      btn.classList.add('active');
+      
+      if (btn.id === 'option-manual') {
+        manualForm.style.display = 'block';
+        existingForm.style.display = 'none';
+      } else {
+        manualForm.style.display = 'none';
+        existingForm.style.display = 'block';
+        loadAvailableConversations();
+      }
+    });
+  });
+  
+  // Load available conversations from page
+  function loadAvailableConversations() {
+    const container = document.getElementById('available-conversations');
+    
+    // Request conversations from parent window
+    if (window.parent) {
+      window.parent.postMessage({ type: 'GET_PAGE_CONVERSATIONS' }, '*');
+    }
+    
+    // Listen for response
+    const messageHandler = (event) => {
+      if (event.data.type === 'PAGE_CONVERSATIONS_RESPONSE') {
+        const conversations = event.data.conversations || [];
+        
+        if (conversations.length === 0) {
+          container.innerHTML = `
+            <div style="padding: 20px; text-align: center; color: #6b7280;">
+              <div style="font-size: 24px; margin-bottom: 8px;">💬</div>
+              <p>No conversations found on this page</p>
+              <p style="font-size: 14px; margin-top: 4px;">Try the manual entry option instead.</p>
+            </div>
+          `;
+        } else {
+          container.innerHTML = conversations.map((conv, i) => `
+            <div class="conversation-option" data-index="${i}" style="padding: 12px; margin-bottom: 8px; border: 1px solid #e5e7eb; border-radius: 6px; cursor: pointer; transition: all 0.2s;">
+              <div style="font-weight: 500; margin-bottom: 4px; font-size: 14px;">${conv.question.substring(0, 80)}${conv.question.length > 80 ? '...' : ''}</div>
+              <div style="color: #6b7280; font-size: 12px;">${conv.answer.substring(0, 100)}${conv.answer.length > 100 ? '...' : ''}</div>
+            </div>
+          `).join('');
+          
+          // Add click handlers
+          container.querySelectorAll('.conversation-option').forEach((option, i) => {
+            option.addEventListener('click', () => {
+              container.querySelectorAll('.conversation-option').forEach(opt => {
+                opt.style.borderColor = '#e5e7eb';
+                opt.style.background = 'white';
+              });
+              option.style.borderColor = '#4f46e5';
+              option.style.background = '#f8fafc';
+              selectedConversation = conversations[i];
+            });
+          });
+        }
+        
+        window.removeEventListener('message', messageHandler);
+      }
+    };
+    
+    window.addEventListener('message', messageHandler);
+  }
+  
+  // Handle add button
+  document.getElementById('confirm-add').addEventListener('click', () => {
+    const isManual = document.getElementById('option-manual').classList.contains('active');
+    
+    if (isManual) {
+      const question = document.getElementById('question-input').value.trim();
+      const answer = document.getElementById('answer-input').value.trim();
+      
+      if (!question || !answer) {
+        alert('Please fill in both question and answer fields.');
+        return;
+      }
+      
+      ConversationStore.addConversation(question, answer);
+    } else {
+      if (!selectedConversation) {
+        alert('Please select a conversation from the list.');
+        return;
+      }
+      
+      ConversationStore.addConversation(selectedConversation.question, selectedConversation.answer);
+    }
+    
+    document.getElementById('enhanced-add-modal').remove();
+  });
+  
+  // Handle cancel button
+  document.getElementById('cancel-add').addEventListener('click', () => {
+    document.getElementById('enhanced-add-modal').remove();
+  });
+  
+  // Handle escape key
+  document.addEventListener('keydown', function escapeHandler(e) {
+    if (e.key === 'Escape') {
+      const modal = document.getElementById('enhanced-add-modal');
+      if (modal) {
+        modal.remove();
+      }
+      document.removeEventListener('keydown', escapeHandler);
+    }
+  });
+}
+
 // Initialize the app
 function initApp() {
   console.log('🚀 Initializing app...');
@@ -197,8 +379,8 @@ function initApp() {
   });
   
   document.getElementById('add-btn').addEventListener('click', () => {
-    const modal = document.getElementById('add-modal');
-    modal.style.display = 'flex';
+    console.log('🖱️ Add button clicked - showing enhanced modal');
+    showEnhancedAddModal();
   });
   
   document.getElementById('cancel-btn').addEventListener('click', () => {

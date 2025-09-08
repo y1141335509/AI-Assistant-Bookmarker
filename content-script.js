@@ -1092,9 +1092,9 @@
     
     // Inject export buttons next to tables in the AI chat interface
     function injectTableExportButtons() {
-        console.log('🔍 Looking for tables to add export buttons...');
+        console.log('🔍 Looking for AI-generated tables to add export buttons...');
         
-        // Find all tables on the page
+        // Find HTML tables that are likely AI-generated (not part of the UI)
         const tables = document.querySelectorAll('table');
         
         tables.forEach((table, index) => {
@@ -1107,135 +1107,493 @@
             const rows = table.querySelectorAll('tr');
             if (rows.length < 2) return;
             
-            // Create export button
-            const exportBtn = document.createElement('button');
-            exportBtn.className = 'ai-table-export-btn';
-            exportBtn.innerHTML = `
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                    <polyline points="14,2 14,8 20,8"></polyline>
-                    <line x1="16" y1="13" x2="8" y2="13"></line>
-                    <line x1="16" y1="17" x2="8" y2="17"></line>
-                    <polyline points="10,9 9,9 8,9"></polyline>
-                </svg>
-                Export to Sheets
-            `;
+            // Skip tables that are likely part of the UI (navigation, controls, etc.)
+            if (isUITable(table)) {
+                return;
+            }
             
-            // Style the button
-            exportBtn.style.cssText = `
-                display: inline-flex;
-                align-items: center;
-                gap: 6px;
-                margin: 8px 0;
-                padding: 6px 12px;
-                background-color: #10b981;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                font-size: 12px;
-                font-weight: 500;
-                cursor: pointer;
-                transition: all 0.2s ease;
-                opacity: 0.8;
-                position: relative;
-                z-index: 1000;
-            `;
+            addExportButtonToTable(table, extractTableData(table), `table_${index + 1}`);
+        });
+        
+        // Find table-like content in AI responses (look in AI message containers)
+        const aiMessageContainers = findAIMessageContainers();
+        
+        aiMessageContainers.forEach((container, containerIndex) => {
+            // Look for markdown tables, CSV-like content, TSV content in AI responses
+            const textContent = container.textContent || '';
             
-            // Add hover effect
-            exportBtn.addEventListener('mouseenter', () => {
-                exportBtn.style.backgroundColor = '#059669';
-                exportBtn.style.opacity = '1';
-                exportBtn.style.transform = 'translateY(-1px)';
-            });
-            
-            exportBtn.addEventListener('mouseleave', () => {
-                exportBtn.style.backgroundColor = '#10b981';
-                exportBtn.style.opacity = '0.8';
-                exportBtn.style.transform = 'translateY(0)';
-            });
-            
-            // Add click handler
-            exportBtn.addEventListener('click', async (e) => {
-                e.preventDefault();
-                e.stopPropagation();
+            // Find pre/code elements within AI responses that contain table data
+            const codeElements = container.querySelectorAll('pre, code');
+            codeElements.forEach((codeElement, index) => {
+                // Skip if export button already exists
+                if (codeElement.parentElement?.querySelector('.ai-table-export-btn')) {
+                    return;
+                }
                 
-                try {
-                    // Extract table data
-                    const tableData = extractTableData(table);
-                    if (!tableData) {
-                        alert('Could not extract table data');
-                        return;
-                    }
-                    
-                    // Show loading state
-                    const originalText = exportBtn.innerHTML;
-                    exportBtn.innerHTML = `
-                        <div style="width: 16px; height: 16px; border: 2px solid #fff; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite;"></div>
-                        Exporting...
-                    `;
-                    exportBtn.style.pointerEvents = 'none';
-                    
-                    // Add spin animation if not exists
-                    if (!document.querySelector('#spin-animation')) {
-                        const style = document.createElement('style');
-                        style.id = 'spin-animation';
-                        style.textContent = `
-                            @keyframes spin {
-                                0% { transform: rotate(0deg); }
-                                100% { transform: rotate(360deg); }
-                            }
-                        `;
-                        document.head.appendChild(style);
-                    }
-                    
-                    // Export as CSV (fallback since Google Sheets API needs OAuth)
-                    await exportTableAsCSV(tableData, `AI_Table_${Date.now()}`);
-                    
-                    // Show success state
-                    exportBtn.innerHTML = `
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="20,6 9,17 4,12"></polyline>
-                        </svg>
-                        Exported!
-                    `;
-                    exportBtn.style.backgroundColor = '#059669';
-                    
-                    // Reset after 2 seconds
-                    setTimeout(() => {
-                        exportBtn.innerHTML = originalText;
-                        exportBtn.style.backgroundColor = '#10b981';
-                        exportBtn.style.pointerEvents = 'auto';
-                    }, 2000);
-                    
-                } catch (error) {
-                    console.error('Export failed:', error);
-                    
-                    // Show error state
-                    exportBtn.innerHTML = `
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <circle cx="12" cy="12" r="10"></circle>
-                            <line x1="15" y1="9" x2="9" y2="15"></line>
-                            <line x1="9" y1="9" x2="15" y2="15"></line>
-                        </svg>
-                        Failed
-                    `;
-                    exportBtn.style.backgroundColor = '#dc2626';
-                    
-                    // Reset after 2 seconds
-                    setTimeout(() => {
-                        exportBtn.innerHTML = originalText;
-                        exportBtn.style.backgroundColor = '#10b981';
-                        exportBtn.style.pointerEvents = 'auto';
-                    }, 2000);
+                const text = codeElement.textContent || '';
+                const tableData = extractTableFromText(text);
+                
+                if (tableData && tableData.length > 1) {
+                    console.log(`✅ Found table in AI response ${containerIndex + 1}, element ${index + 1}:`, tableData.slice(0, 2));
+                    addExportButtonToElement(codeElement, tableData, `ai_table_${containerIndex + 1}_${index + 1}`);
                 }
             });
             
-            // Insert button after the table
-            if (table.parentElement) {
-                table.parentElement.insertBefore(exportBtn, table.nextSibling);
-                console.log(`✅ Added export button for table ${index + 1}`);
+            // Look for markdown-style tables directly in text content (not in code blocks)
+            const markdownTables = findMarkdownTablesInText(container);
+            markdownTables.forEach((tableInfo, index) => {
+                if (tableInfo.tableData && tableInfo.tableData.length > 1) {
+                    console.log(`✅ Found markdown table in AI response ${containerIndex + 1}, table ${index + 1}:`, tableInfo.tableData.slice(0, 2));
+                    addExportButtonToElement(tableInfo.element, tableInfo.tableData, `md_table_${containerIndex + 1}_${index + 1}`);
+                }
+            });
+        });
+    }
+    
+    // Check if a table is likely part of the UI (navigation, controls, etc.)
+    function isUITable(table) {
+        // Check for common UI table classes or attributes
+        const uiClasses = ['nav', 'menu', 'sidebar', 'header', 'footer', 'toolbar', 'controls'];
+        const tableClasses = table.className.toLowerCase();
+        const tableId = table.id.toLowerCase();
+        
+        // Skip tables with UI-related classes or IDs
+        if (uiClasses.some(cls => tableClasses.includes(cls) || tableId.includes(cls))) {
+            return true;
+        }
+        
+        // Skip very small tables (likely UI elements)
+        const rows = table.querySelectorAll('tr');
+        const cells = table.querySelectorAll('td, th');
+        if (rows.length <= 1 || cells.length <= 2) {
+            return true;
+        }
+        
+        // Skip tables with buttons, links, or form elements (likely UI)
+        const interactiveElements = table.querySelectorAll('button, a, input, select, textarea');
+        if (interactiveElements.length > 0) {
+            return true;
+        }
+        
+        // Check if table is inside a known UI container
+        const uiContainers = table.closest('.sidebar, .nav, .menu, .header, .footer, .toolbar');
+        if (uiContainers) {
+            return true;
+        }
+        
+        return false;
+    }
+    
+    // Find AI message containers based on current platform
+    function findAIMessageContainers() {
+        const hostname = window.location.hostname;
+        let aiMessageSelectors = [];
+        
+        if (hostname.includes('chatgpt.com') || hostname.includes('chat.openai.com')) {
+            // ChatGPT selectors for AI messages
+            aiMessageSelectors = [
+                '[data-message-author-role="assistant"]',
+                '.group.w-full.text-token-text-primary[data-testid]',
+                '.markdown.prose'
+            ];
+        } else if (hostname.includes('claude.ai')) {
+            // Claude selectors for AI messages
+            aiMessageSelectors = [
+                '[data-is-streaming="false"]',
+                '.font-user-message',
+                '.prose'
+            ];
+        } else if (hostname.includes('gemini.google.com') || hostname.includes('bard.google.com')) {
+            // Gemini/Bard selectors
+            aiMessageSelectors = [
+                '[data-response-type="assistant"]',
+                '.model-response-text',
+                '.response-container'
+            ];
+        } else {
+            // Generic selectors for other AI platforms
+            aiMessageSelectors = [
+                '.assistant-message',
+                '.ai-response',
+                '.bot-message',
+                '.response',
+                '.markdown',
+                '.prose'
+            ];
+        }
+        
+        // Collect all matching elements
+        const containers = [];
+        aiMessageSelectors.forEach(selector => {
+            try {
+                const elements = document.querySelectorAll(selector);
+                elements.forEach(el => {
+                    // Only add if not already in containers
+                    if (!containers.includes(el)) {
+                        containers.push(el);
+                    }
+                });
+            } catch (e) {
+                // Ignore invalid selectors
             }
         });
+        
+        return containers;
+    }
+    
+    // Find markdown tables directly in text content (not wrapped in code blocks)
+    function findMarkdownTablesInText(container) {
+        const tables = [];
+        const textContent = container.textContent || '';
+        
+        // Look for markdown table patterns
+        const markdownTableRegex = /(?:^|\n)((?:\|[^\n]*\|[\n\r]*)+)/gm;
+        let match;
+        
+        while ((match = markdownTableRegex.exec(textContent)) !== null) {
+            const tableText = match[1].trim();
+            const tableData = parseMarkdownTableFromText(tableText);
+            
+            if (tableData && tableData.length > 1) {
+                // Find the DOM element that contains this table
+                const textNodes = getTextNodes(container);
+                const containingElement = findElementContainingText(textNodes, tableText.substring(0, 50));
+                
+                if (containingElement) {
+                    tables.push({
+                        element: containingElement,
+                        tableData: tableData,
+                        text: tableText
+                    });
+                }
+            }
+        }
+        
+        return tables;
+    }
+    
+    // Helper function to get all text nodes in an element
+    function getTextNodes(element) {
+        const textNodes = [];
+        const walker = document.createTreeWalker(
+            element,
+            NodeFilter.SHOW_TEXT,
+            null,
+            false
+        );
+        
+        let node;
+        while (node = walker.nextNode()) {
+            textNodes.push(node);
+        }
+        
+        return textNodes;
+    }
+    
+    // Helper function to find element containing specific text
+    function findElementContainingText(textNodes, searchText) {
+        for (const node of textNodes) {
+            if (node.textContent.includes(searchText)) {
+                return node.parentElement;
+            }
+        }
+        return null;
+    }
+    
+    // Extract table data from text content (handles various formats)
+    function extractTableFromText(text) {
+        if (!text || text.trim().length === 0) return null;
+        
+        // HTML table in code block
+        if (/<table[\s\S]*?<\/table>/i.test(text)) {
+            const result = parseHTMLTableFromText(text);
+            if (result && result.length > 1) return result;
+        }
+        
+        // Markdown table (priority over other formats as it's explicit)
+        if (/\|[\s\S]*?\|/m.test(text)) {
+            const result = parseMarkdownTableFromText(text);
+            if (result && result.length > 1 && result[0].length > 1) return result;
+        }
+        
+        // TSV format (check before CSV as tabs are more explicit separators)
+        if (text.includes('\t')) {
+            const result = parseTSVFromText(text);
+            if (result && result.length > 1 && result[0].length > 1) return result;
+        }
+        
+        // CSV format (most common, check last to avoid false positives)
+        if (text.includes(',')) {
+            const result = parseCSVFromText(text);
+            if (result && result.length > 1 && result[0].length > 1) return result;
+        }
+        
+        // Simple space-separated tables (as last resort)
+        const result = parseSpaceSeparatedTable(text);
+        if (result && result.length > 1 && result[0].length > 1) return result;
+        
+        return null;
+    }
+    
+    // Parse HTML table from text content
+    function parseHTMLTableFromText(text) {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(text, 'text/html');
+        const table = doc.querySelector('table');
+        
+        if (!table) return null;
+        
+        const rows = Array.from(table.querySelectorAll('tr'));
+        return rows.map(row => 
+            Array.from(row.querySelectorAll('td, th')).map(cell => 
+                cell.textContent.trim()
+            )
+        ).filter(row => row.length > 0);
+    }
+    
+    // Parse markdown table from text
+    function parseMarkdownTableFromText(text) {
+        const lines = text.split('\n').filter(line => line.includes('|'));
+        return lines
+            .filter(line => !line.match(/^\s*\|[\s\-\|:]+\|\s*$/)) // Skip separator lines
+            .map(line => 
+                line.split('|')
+                    .map(cell => cell.trim())
+                    .filter(cell => cell !== '')
+            ).filter(row => row.length > 0);
+    }
+    
+    // Parse CSV from text with better handling of quoted values
+    function parseCSVFromText(text) {
+        const lines = text.split('\n').filter(line => line.trim() && line.includes(','));
+        
+        // Check if this looks like a proper table (consistent column count)
+        if (lines.length < 2) return null;
+        
+        const rows = lines.map(line => {
+            // Simple CSV parser that handles quoted values
+            const cells = [];
+            let current = '';
+            let inQuotes = false;
+            let i = 0;
+            
+            while (i < line.length) {
+                const char = line[i];
+                
+                if (char === '"' && !inQuotes) {
+                    inQuotes = true;
+                } else if (char === '"' && inQuotes && line[i + 1] === '"') {
+                    current += '"';
+                    i++; // Skip next quote
+                } else if (char === '"' && inQuotes) {
+                    inQuotes = false;
+                } else if (char === ',' && !inQuotes) {
+                    cells.push(current.trim());
+                    current = '';
+                } else {
+                    current += char;
+                }
+                i++;
+            }
+            cells.push(current.trim());
+            
+            return cells.map(cell => cell.replace(/^"|"$/g, ''));
+        });
+        
+        // Validate that it looks like a table (similar column counts)
+        const firstRowLength = rows[0].length;
+        const validRows = rows.filter(row => Math.abs(row.length - firstRowLength) <= 1);
+        
+        return validRows.length >= 2 ? validRows : null;
+    }
+    
+    // Parse TSV from text
+    function parseTSVFromText(text) {
+        const lines = text.split('\n').filter(line => line.trim() && line.includes('\t'));
+        
+        if (lines.length < 2) return null;
+        
+        const rows = lines.map(line => line.split('\t').map(cell => cell.trim()));
+        
+        // Validate column consistency
+        const firstRowLength = rows[0].length;
+        const validRows = rows.filter(row => Math.abs(row.length - firstRowLength) <= 1);
+        
+        return validRows.length >= 2 && firstRowLength >= 2 ? validRows : null;
+    }
+    
+    // Parse space-separated tables (for simple aligned tables)
+    function parseSpaceSeparatedTable(text) {
+        const lines = text.split('\n').filter(line => line.trim().length > 0);
+        
+        if (lines.length < 2) return null;
+        
+        // Look for lines that have multiple "words" separated by multiple spaces
+        const potentialTableLines = lines.filter(line => {
+            // Must have at least 2 groups of 2+ spaces, indicating columns
+            const spaceGroups = line.match(/\s{2,}/g);
+            return spaceGroups && spaceGroups.length >= 1;
+        });
+        
+        if (potentialTableLines.length < 2) return null;
+        
+        const rows = potentialTableLines.map(line => {
+            // Split on multiple spaces (2 or more)
+            return line.split(/\s{2,}/).map(cell => cell.trim()).filter(cell => cell.length > 0);
+        });
+        
+        // Check for consistency in column count
+        const avgColCount = rows.reduce((sum, row) => sum + row.length, 0) / rows.length;
+        const validRows = rows.filter(row => Math.abs(row.length - avgColCount) <= 1);
+        
+        return validRows.length >= 2 && avgColCount >= 2 ? validRows : null;
+    }
+    
+    // Add export button to a table element
+    function addExportButtonToTable(table, tableData, filename) {
+        const exportBtn = createExportButton(tableData, filename);
+        
+        // Insert button after the table
+        if (table.parentElement) {
+            table.parentElement.insertBefore(exportBtn, table.nextSibling);
+            console.log(`✅ Added export button for table: ${filename}`);
+        }
+    }
+    
+    // Add export button to any element (like code blocks)
+    function addExportButtonToElement(element, tableData, filename) {
+        const exportBtn = createExportButton(tableData, filename);
+        
+        // Insert button after the element
+        if (element.parentElement) {
+            element.parentElement.insertBefore(exportBtn, element.nextSibling);
+            console.log(`✅ Added export button for code block table: ${filename}`);
+        }
+    }
+    
+    // Create export button with consistent styling and functionality
+    function createExportButton(tableData, filename) {
+        const exportBtn = document.createElement('button');
+        exportBtn.className = 'ai-table-export-btn';
+        exportBtn.innerHTML = `
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14,2 14,8 20,8"></polyline>
+                <line x1="16" y1="13" x2="8" y2="13"></line>
+                <line x1="16" y1="17" x2="8" y2="17"></line>
+                <polyline points="10,9 9,9 8,9"></polyline>
+            </svg>
+            Export to Sheets
+        `;
+            
+        // Style the button
+        exportBtn.style.cssText = `
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin: 8px 0;
+            padding: 6px 12px;
+            background-color: #10b981;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            opacity: 0.8;
+            position: relative;
+            z-index: 1000;
+        `;
+        
+        // Add hover effect
+        exportBtn.addEventListener('mouseenter', () => {
+            exportBtn.style.backgroundColor = '#059669';
+            exportBtn.style.opacity = '1';
+            exportBtn.style.transform = 'translateY(-1px)';
+        });
+        
+        exportBtn.addEventListener('mouseleave', () => {
+            exportBtn.style.backgroundColor = '#10b981';
+            exportBtn.style.opacity = '0.8';
+            exportBtn.style.transform = 'translateY(0)';
+        });
+        
+        // Add click handler
+        exportBtn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            try {
+                if (!tableData || tableData.length === 0) {
+                    alert('No table data to export');
+                    return;
+                }
+                
+                // Show loading state
+                const originalText = exportBtn.innerHTML;
+                exportBtn.innerHTML = `
+                    <div style="width: 16px; height: 16px; border: 2px solid #fff; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+                    Exporting...
+                `;
+                exportBtn.style.pointerEvents = 'none';
+                
+                // Add spin animation if not exists
+                if (!document.querySelector('#spin-animation')) {
+                    const style = document.createElement('style');
+                    style.id = 'spin-animation';
+                    style.textContent = `
+                        @keyframes spin {
+                            0% { transform: rotate(0deg); }
+                            100% { transform: rotate(360deg); }
+                        }
+                    `;
+                    document.head.appendChild(style);
+                }
+                
+                // Export as CSV
+                await exportTableAsCSV(tableData, filename);
+                
+                // Show success state
+                exportBtn.innerHTML = `
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="20,6 9,17 4,12"></polyline>
+                    </svg>
+                    Exported!
+                `;
+                exportBtn.style.backgroundColor = '#059669';
+                
+                // Reset after 2 seconds
+                setTimeout(() => {
+                    exportBtn.innerHTML = originalText;
+                    exportBtn.style.backgroundColor = '#10b981';
+                    exportBtn.style.pointerEvents = 'auto';
+                }, 2000);
+                
+            } catch (error) {
+                console.error('Export failed:', error);
+                
+                // Show error state
+                exportBtn.innerHTML = `
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="15" y1="9" x2="9" y2="15"></line>
+                        <line x1="9" y1="9" x2="15" y2="15"></line>
+                    </svg>
+                    Failed
+                `;
+                exportBtn.style.backgroundColor = '#dc2626';
+                
+                // Reset after 2 seconds
+                setTimeout(() => {
+                    exportBtn.innerHTML = originalText;
+                    exportBtn.style.backgroundColor = '#10b981';
+                    exportBtn.style.pointerEvents = 'auto';
+                }, 2000);
+            }
+        });
+        
+        return exportBtn;
     }
     
     // Extract table data from DOM table element
@@ -1683,6 +2041,22 @@
                     } else if (event.data.type === 'SCROLL_TO_CONVERSATION') {
                         console.log('🖱️ Scroll to conversation requested:', event.data.conversationId);
                         scrollToConversation(event.data.conversationId);
+                    } else if (event.data.type === 'GET_PAGE_CONVERSATIONS') {
+                        console.log('📄 Page conversations requested');
+                        // Send current page conversations to iframe
+                        const conversations = extractConversations();
+                        const iframe = document.querySelector('#ai-chat-navigator-extension iframe');
+                        if (iframe && iframe.contentWindow) {
+                            iframe.contentWindow.postMessage({
+                                type: 'PAGE_CONVERSATIONS_RESPONSE',
+                                conversations: conversations.map(conv => ({
+                                    question: conv.question,
+                                    answer: conv.answer,
+                                    timestamp: conv.timestamp
+                                }))
+                            }, '*');
+                            console.log(`📄 Sent ${conversations.length} conversations to iframe`);
+                        }
                     } else if (event.data === 'close') {
                         console.log('❌ Close drawer requested');
                         const container = document.querySelector('#ai-chat-navigator-extension');
@@ -1758,6 +2132,96 @@
         }
     }
 
+    // Add quick-add buttons to conversations on the page
+    function addQuickAddButtons() {
+        console.log('➕ Adding quick-add buttons to conversations...');
+        
+        // Find conversation elements that don't already have buttons
+        const conversations = extractConversations();
+        
+        conversations.forEach((conv, index) => {
+            if (conv.questionElement && !conv.questionElement.querySelector('.quick-add-btn')) {
+                const addBtn = document.createElement('button');
+                addBtn.className = 'quick-add-btn';
+                addBtn.innerHTML = '➕';
+                addBtn.title = 'Add to drawer';
+                
+                addBtn.style.cssText = `
+                    position: absolute;
+                    top: 8px;
+                    right: 8px;
+                    width: 24px;
+                    height: 24px;
+                    background: #4f46e5;
+                    color: white;
+                    border: none;
+                    border-radius: 50%;
+                    font-size: 12px;
+                    cursor: pointer;
+                    opacity: 0.7;
+                    transition: all 0.2s ease;
+                    z-index: 1001;
+                    display: none;
+                `;
+                
+                // Show button on hover
+                const container = conv.questionElement.closest('[data-message-author-role], [data-testid*="conversation-turn"], .group') || conv.questionElement;
+                container.style.position = 'relative';
+                
+                container.addEventListener('mouseenter', () => {
+                    addBtn.style.display = 'flex';
+                    addBtn.style.alignItems = 'center';
+                    addBtn.style.justifyContent = 'center';
+                });
+                
+                container.addEventListener('mouseleave', () => {
+                    addBtn.style.display = 'none';
+                });
+                
+                addBtn.addEventListener('mouseenter', () => {
+                    addBtn.style.opacity = '1';
+                    addBtn.style.transform = 'scale(1.1)';
+                });
+                
+                addBtn.addEventListener('mouseleave', () => {
+                    addBtn.style.opacity = '0.7';
+                    addBtn.style.transform = 'scale(1)';
+                });
+                
+                // Click handler
+                addBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    
+                    // Send to iframe to add to drawer
+                    const iframe = document.querySelector('#ai-chat-navigator-extension iframe');
+                    if (iframe && iframe.contentWindow) {
+                        iframe.contentWindow.postMessage({
+                            type: 'ADD_CONVERSATION_TO_DRAWER',
+                            conversation: {
+                                id: conv.id || `quick_${Date.now()}`,
+                                question: conv.question,
+                                answer: conv.answer,
+                                timestamp: conv.timestamp || new Date().toISOString()
+                            }
+                        }, '*');
+                    }
+                    
+                    // Visual feedback
+                    addBtn.innerHTML = '✓';
+                    addBtn.style.backgroundColor = '#10b981';
+                    setTimeout(() => {
+                        addBtn.innerHTML = '➕';
+                        addBtn.style.backgroundColor = '#4f46e5';
+                    }, 1500);
+                });
+                
+                container.appendChild(addBtn);
+                console.log(`✅ Added quick-add button to conversation ${index + 1}`);
+            }
+        });
+    }
+
     // Start monitoring for conversation changes with enhanced pre-loading
     function startMonitoring() {
         // Pre-load existing conversations first
@@ -1766,6 +2230,8 @@
         // Continue with regular monitoring
         setTimeout(() => {
             updateConversations();
+            // Add quick-add buttons after conversations are loaded
+            setTimeout(() => addQuickAddButtons(), 1000);
         }, 3000); // Slightly longer initial delay to allow pre-loading
         
         // Monitor for changes with enhanced detection for all platforms
@@ -1856,8 +2322,11 @@
                 window.conversationUpdateTimer = setTimeout(() => {
                     console.log('🔄 Detected conversation changes:', changeDescription);
                     updateConversations();
-                    // Also check for tables after conversation updates
-                    setTimeout(() => injectTableExportButtons(), 500);
+                    // Also check for tables and add buttons after conversation updates
+                    setTimeout(() => {
+                        injectTableExportButtons();
+                        addQuickAddButtons();
+                    }, 500);
                 }, 1500); // Slightly longer delay to ensure content is fully rendered
             }
         });
@@ -1873,8 +2342,9 @@
             const currentCount = currentConversations.length;
             updateConversations();
             
-            // Also periodically check for tables
+            // Also periodically check for tables and add buttons
             injectTableExportButtons();
+            addQuickAddButtons();
             
             // Log only if count changed
             setTimeout(() => {
